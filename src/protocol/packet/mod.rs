@@ -1,61 +1,38 @@
 pub mod connected;
 pub mod open_connection;
 pub mod unconnected;
-mod utils;
+mod error;
+mod registry;
 
 pub use connected::*;
 pub use open_connection::*;
 pub use unconnected::*;
+pub use error::DecodeError;
+pub use registry::RaknetPacket;
 
 use bytes::{Buf, BufMut};
-use utils::define_raknet_packets;
 
+/// Trait implemented by all concrete RakNet packet body types.
+///
+/// Implementations are responsible for encoding/decoding only the
+/// packet body – the leading ID byte is handled by `RaknetPacket`.
 pub trait Packet: Sized {
+    /// The fixed ID byte used to identify this packet on the wire.
     const ID: u8;
+
+    /// Encode the body of this packet into the destination buffer.
     fn encode_body(&self, dst: &mut impl BufMut);
+
+    /// Decode the body of this packet from the source buffer.
     fn decode_body(src: &mut impl Buf) -> Result<Self, DecodeError>;
 }
 
-pub enum DecodeError {
-    UnexpectedEof,
-    UnknownId(u8),
-    VarIntExceedsLimit,
-    /// This exists for packets that are considered legacy.
-    /// If this is returned I'd log the packet id and hex dump
-    /// then send it over my way and I will see what I can do.
-    UnimplementedPacket {
-        id: u8,
-        payload: bytes::Bytes,
-    },
-    InvalidAddrVersion(u8),
-    UnknownDisconnectReason(u8),
-}
-
+/// Trait for types that know how to encode/decode themselves using
+/// the RakNet wire format.
 pub trait RaknetEncodable: Sized {
+    /// Encode this value into the destination buffer.
     fn encode_raknet(&self, dst: &mut impl BufMut);
-    fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError>;
-}
 
-define_raknet_packets! {
-    ConnectedPing,
-    ConnectedPong,
-    UnconnectedPing,
-    UnconnectedPong,
-    OpenConnectionRequest1,
-    OpenConnectionReply1,
-    OpenConnectionRequest2,
-    OpenConnectionReply2,
-    ConnectionRequest,
-    ConnectionRequestAccepted,
-    ConnectionRequestFailed,
-    AlreadyConnected,
-    NewIncomingConnection,
-    NoFreeIncomingConnections,
-    DisconnectionNotification,
-    ConnectionLost,
-    ConnectionBanned,
-    IncompatibleProtocolVersion,
-    IpRecentlyConnected,
-    Timestamp,
-    AdvertiseSystem,
+    /// Decode a value of this type from the source buffer.
+    fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError>;
 }

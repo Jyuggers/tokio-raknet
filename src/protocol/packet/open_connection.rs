@@ -1,3 +1,7 @@
+//! Offline connection negotiation and handshake packets.
+//!
+//! These packets are exchanged before a fully connected session exists.
+
 use std::net::SocketAddr;
 
 use bytes::{BufMut, Bytes};
@@ -8,6 +12,8 @@ use crate::protocol::{
     types::{EoBPadding, Magic, RaknetTime},
 };
 
+/// Client's initial connection request containing protocol and MTU probe.
+#[derive(Debug, Clone)]
 pub struct OpenConnectionRequest1 {
     pub magic: Magic,
     pub protocol_version: u8,
@@ -32,6 +38,8 @@ impl Packet for OpenConnectionRequest1 {
     }
 }
 
+/// Server's reply with its GUID and selected MTU (and optional security cookie).
+#[derive(Debug, Clone)]
 pub struct OpenConnectionReply1 {
     pub magic: Magic,
     pub server_guide: u64,
@@ -66,6 +74,8 @@ impl Packet for OpenConnectionReply1 {
     }
 }
 
+/// Second stage connection request including target address, MTU and GUID.
+#[derive(Debug, Clone)]
 pub struct OpenConnectionRequest2 {
     pub magic: Magic,
     pub cookie: Option<u32>,
@@ -138,6 +148,8 @@ impl Packet for OpenConnectionRequest2 {
     }
 }
 
+/// Second stage server reply that finalises connection parameters.
+#[derive(Debug, Clone)]
 pub struct OpenConnectionReply2 {
     pub magic: Magic,
     pub server_guid: u64,
@@ -168,6 +180,8 @@ impl Packet for OpenConnectionReply2 {
     }
 }
 
+/// Sent when the client and server disagree on the protocol version.
+#[derive(Debug, Clone)]
 pub struct IncompatibleProtocolVersion {
     pub protocol: u8,
     pub magic: Magic,
@@ -192,6 +206,8 @@ impl Packet for IncompatibleProtocolVersion {
     }
 }
 
+/// Notification that the client is already connected to the server.
+#[derive(Debug, Clone)]
 pub struct AlreadyConnected {
     pub magic: Magic,
     pub server_guid: u64,
@@ -213,6 +229,8 @@ impl Packet for AlreadyConnected {
     }
 }
 
+/// Online connection request used once offline negotiation has succeeded.
+#[derive(Debug, Clone)]
 pub struct ConnectionRequest {
     pub server_guid: u64,
     pub timestamp: RaknetTime,
@@ -237,6 +255,8 @@ impl Packet for ConnectionRequest {
     }
 }
 
+/// Server's acceptance of a connection request, including system addresses.
+#[derive(Debug, Clone)]
 pub struct ConnectionRequestAccepted {
     pub address: SocketAddr,
     pub system_index: u16,
@@ -283,6 +303,8 @@ impl Packet for ConnectionRequestAccepted {
     }
 }
 
+/// Notification that a connection request failed.
+#[derive(Debug, Clone)]
 pub struct ConnectionRequestFailed {
     pub magic: Magic,
     pub server_guid: u64,
@@ -304,6 +326,8 @@ impl Packet for ConnectionRequestFailed {
     }
 }
 
+/// Notification of a new incoming connection, including system addresses.
+#[derive(Debug, Clone)]
 pub struct NewIncomingConnection {
     pub server_address: SocketAddr,
     pub system_addresses: [SocketAddr; 10],
@@ -340,5 +364,27 @@ impl Packet for NewIncomingConnection {
             request_timestamp,
             accepted_timestamp,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::BytesMut;
+
+    #[test]
+    fn connection_request_roundtrip() {
+        let pkt = ConnectionRequest {
+            server_guid: 123,
+            timestamp: RaknetTime(456),
+            secure: true,
+        };
+        let mut buf = BytesMut::new();
+        pkt.encode_body(&mut buf);
+        let mut slice = buf.freeze();
+        let decoded = ConnectionRequest::decode_body(&mut slice).unwrap();
+        assert_eq!(decoded.server_guid, pkt.server_guid);
+        assert_eq!(decoded.timestamp.0, pkt.timestamp.0);
+        assert_eq!(decoded.secure, pkt.secure);
     }
 }

@@ -1,3 +1,7 @@
+//! Online (connected) RakNet control packets.
+//!
+//! These packets are only used once a session is established.
+
 use bytes::{Buf, BufMut, Bytes};
 
 use crate::protocol::{
@@ -6,6 +10,8 @@ use crate::protocol::{
     types::RaknetTime,
 };
 
+/// Ping sent over an established connection to measure round-trip time.
+#[derive(Debug, Clone)]
 pub struct ConnectedPing {
     pub ping_time: RaknetTime,
 }
@@ -24,6 +30,7 @@ impl Packet for ConnectedPing {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ConnectedPong {
     pub ping_time: RaknetTime,
     pub pong_time: RaknetTime,
@@ -45,6 +52,8 @@ impl Packet for ConnectedPong {
     }
 }
 
+/// Notification that the connection is being closed, with an optional reason.
+#[derive(Debug, Clone)]
 pub struct DisconnectionNotification {
     pub reason: DisconnectReason,
 }
@@ -69,6 +78,8 @@ impl Packet for DisconnectionNotification {
     }
 }
 
+/// ID-only marker used to detect lost connections.
+#[derive(Debug, Clone)]
 pub struct DetectLostConnection;
 
 impl Packet for DetectLostConnection {
@@ -84,6 +95,8 @@ impl Packet for DetectLostConnection {
     }
 }
 
+/// ID-only marker indicating that the server has no free incoming slots.
+#[derive(Debug, Clone)]
 pub struct NoFreeIncomingConnections;
 
 impl Packet for NoFreeIncomingConnections {
@@ -99,6 +112,8 @@ impl Packet for NoFreeIncomingConnections {
     }
 }
 
+/// Legacy packet representing a connection loss with an opaque payload.
+#[derive(Debug, Clone)]
 pub struct ConnectionLost {
     pub payload: Bytes,
 }
@@ -121,6 +136,7 @@ impl Packet for ConnectionLost {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ConnectionBanned {
     pub payload: Bytes,
 }
@@ -143,6 +159,8 @@ impl Packet for ConnectionBanned {
     }
 }
 
+/// ID-only marker indicating that this IP has recently connected.
+#[derive(Debug, Clone)]
 pub struct IpRecentlyConnected;
 
 impl Packet for IpRecentlyConnected {
@@ -158,6 +176,8 @@ impl Packet for IpRecentlyConnected {
     }
 }
 
+/// Legacy timestamp packet with an opaque payload.
+#[derive(Debug, Clone)]
 pub struct Timestamp {
     payload: Bytes,
 }
@@ -180,6 +200,8 @@ impl Packet for Timestamp {
     }
 }
 
+/// Legacy advertisement packet with an opaque payload.
+#[derive(Debug, Clone)]
 pub struct AdvertiseSystem {
     payload: Bytes,
 }
@@ -199,5 +221,23 @@ impl Packet for AdvertiseSystem {
             id: Self::ID,
             payload,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::BytesMut;
+
+    #[test]
+    fn connected_ping_roundtrip() {
+        let pkt = ConnectedPing {
+            ping_time: RaknetTime(999),
+        };
+        let mut buf = BytesMut::new();
+        pkt.encode_body(&mut buf);
+        let mut slice = buf.freeze();
+        let decoded = ConnectedPing::decode_body(&mut slice).unwrap();
+        assert_eq!(decoded.ping_time.0, pkt.ping_time.0);
     }
 }

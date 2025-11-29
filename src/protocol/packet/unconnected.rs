@@ -1,3 +1,5 @@
+//! Unconnected (offline) RakNet discovery and ping packets.
+
 use bytes::{Buf, BufMut, Bytes};
 
 use crate::protocol::{
@@ -5,6 +7,8 @@ use crate::protocol::{
     types::{Advertisement, Magic, RaknetTime},
 };
 
+/// Unconnected ping used by clients to discover RakNet servers.
+#[derive(Debug, Clone)]
 pub struct UnconnectedPing {
     pub ping_time: RaknetTime,
     pub magic: Magic,
@@ -27,6 +31,8 @@ impl Packet for UnconnectedPing {
     }
 }
 
+/// Unconnected pong sent by servers in response to `UnconnectedPing`.
+#[derive(Debug, Clone)]
 pub struct UnconnectedPong {
     pub ping_time: RaknetTime,
     pub server_guid: u64,
@@ -54,6 +60,8 @@ impl Packet for UnconnectedPong {
     }
 }
 
+/// Legacy packet used for querying open connections; currently unimplemented.
+#[derive(Debug, Clone)]
 pub struct UnconnectedPingOpenConnections {
     pub payload: Bytes,
 }
@@ -73,5 +81,42 @@ impl Packet for UnconnectedPingOpenConnections {
             id: Self::ID,
             payload,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::BytesMut;
+
+    #[test]
+    fn unconnected_ping_roundtrip() {
+        let pkt = UnconnectedPing {
+            ping_time: RaknetTime(123),
+            magic: [0x23; 16],
+        };
+        let mut buf = BytesMut::new();
+        pkt.encode_body(&mut buf);
+        let mut slice = buf.freeze();
+        let decoded = UnconnectedPing::decode_body(&mut slice).unwrap();
+        assert_eq!(decoded.ping_time.0, pkt.ping_time.0);
+        assert_eq!(decoded.magic, pkt.magic);
+    }
+
+    #[test]
+    fn unconnected_pong_roundtrip() {
+        let pkt = UnconnectedPong {
+            ping_time: RaknetTime(1),
+            server_guid: 2,
+            magic: [0x45; 16],
+            advertisement: Advertisement(None),
+        };
+        let mut buf = BytesMut::new();
+        pkt.encode_body(&mut buf);
+        let mut slice = buf.freeze();
+        let decoded = UnconnectedPong::decode_body(&mut slice).unwrap();
+        assert_eq!(decoded.ping_time.0, pkt.ping_time.0);
+        assert_eq!(decoded.server_guid, pkt.server_guid);
+        assert_eq!(decoded.magic, pkt.magic);
     }
 }
