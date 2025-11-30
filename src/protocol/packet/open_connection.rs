@@ -23,7 +23,10 @@ pub struct OpenConnectionRequest1 {
 impl Packet for OpenConnectionRequest1 {
     const ID: u8 = 0x05;
 
-    fn encode_body(&self, dst: &mut impl bytes::BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl bytes::BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.magic.encode_raknet(dst)?;
         self.protocol_version.encode_raknet(dst)?;
         self.padding.encode_raknet(dst)?;
@@ -51,7 +54,10 @@ pub struct OpenConnectionReply1 {
 impl Packet for OpenConnectionReply1 {
     const ID: u8 = 0x06;
 
-    fn encode_body(&self, dst: &mut impl bytes::BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl bytes::BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.magic.encode_raknet(dst)?;
         self.server_guid.encode_raknet(dst)?;
         self.cookie.is_some().encode_raknet(dst)?; // security bool
@@ -90,7 +96,10 @@ pub struct OpenConnectionRequest2 {
 impl Packet for OpenConnectionRequest2 {
     const ID: u8 = 0x07;
 
-    fn encode_body(&self, dst: &mut impl bytes::BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl bytes::BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.magic.encode_raknet(dst)?;
         if let Some(cookie) = self.cookie {
             cookie.encode_raknet(dst)?;
@@ -152,7 +161,10 @@ pub struct OpenConnectionReply2 {
 impl Packet for OpenConnectionReply2 {
     const ID: u8 = 0x08;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.magic.encode_raknet(dst)?;
         self.server_guid.encode_raknet(dst)?;
         self.server_addr.encode_raknet(dst)?;
@@ -183,7 +195,10 @@ pub struct IncompatibleProtocolVersion {
 impl Packet for IncompatibleProtocolVersion {
     const ID: u8 = 0x19;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.protocol.encode_raknet(dst)?;
         self.magic.encode_raknet(dst)?;
         self.server_guid.encode_raknet(dst)?;
@@ -209,7 +224,10 @@ pub struct AlreadyConnected {
 impl Packet for AlreadyConnected {
     const ID: u8 = 0x12;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.magic.encode_raknet(dst)?;
         self.server_guid.encode_raknet(dst)?;
         Ok(())
@@ -234,7 +252,10 @@ pub struct ConnectionRequest {
 impl Packet for ConnectionRequest {
     const ID: u8 = 0x09;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.server_guid.encode_raknet(dst)?;
         self.timestamp.encode_raknet(dst)?;
         self.secure.encode_raknet(dst)?;
@@ -263,7 +284,10 @@ pub struct ConnectionRequestAccepted {
 impl Packet for ConnectionRequestAccepted {
     const ID: u8 = 0x10;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.address.encode_raknet(dst)?;
         self.system_index.encode_raknet(dst)?;
 
@@ -309,7 +333,10 @@ pub struct ConnectionRequestFailed {
 impl Packet for ConnectionRequestFailed {
     const ID: u8 = 0x11;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.magic.encode_raknet(dst)?;
         self.server_guid.encode_raknet(dst)?;
         Ok(())
@@ -335,7 +362,10 @@ pub struct NewIncomingConnection {
 impl Packet for NewIncomingConnection {
     const ID: u8 = 0x13;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.server_address.encode_raknet(dst)?;
         for address in &self.system_addresses {
             address.encode_raknet(dst)?;

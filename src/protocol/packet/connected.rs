@@ -20,7 +20,10 @@ pub struct ConnectedPing {
 impl Packet for ConnectedPing {
     const ID: u8 = 0x00;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.ping_time.encode_raknet(dst)
     }
 
@@ -40,7 +43,10 @@ pub struct ConnectedPong {
 impl Packet for ConnectedPong {
     const ID: u8 = 0x03;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.ping_time.encode_raknet(dst)?;
         self.pong_time.encode_raknet(dst)?;
         Ok(())
@@ -63,7 +69,10 @@ pub struct DisconnectionNotification {
 impl Packet for DisconnectionNotification {
     const ID: u8 = 0x15;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.reason.encode_raknet(dst)
     }
 
@@ -90,7 +99,10 @@ impl Packet for DetectLostConnection {
     // Its an ID only marker.
     // so just noop basically.
 
-    fn encode_body(&self, _dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        _dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         Ok(())
     }
 
@@ -109,7 +121,10 @@ impl Packet for NoFreeIncomingConnections {
     // Its an ID only marker.
     // so just noop basically.
 
-    fn encode_body(&self, _dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        _dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         Ok(())
     }
 
@@ -127,7 +142,10 @@ pub struct ConnectionLost {
 impl Packet for ConnectionLost {
     const ID: u8 = 0x16;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         dst.put_slice(&self.payload);
         Ok(())
     }
@@ -151,7 +169,10 @@ pub struct ConnectionBanned {
 impl Packet for ConnectionBanned {
     const ID: u8 = 0x17;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         dst.put_slice(&self.payload);
         Ok(())
     }
@@ -177,7 +198,10 @@ impl Packet for IpRecentlyConnected {
     // Its an ID only marker.
     // so just noop basically.
 
-    fn encode_body(&self, _dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        _dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         Ok(())
     }
 
@@ -195,7 +219,10 @@ pub struct Timestamp {
 impl Packet for Timestamp {
     const ID: u8 = 0x1b;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         dst.put_slice(&self.payload);
         Ok(())
     }
@@ -220,7 +247,10 @@ pub struct AdvertiseSystem {
 impl Packet for AdvertiseSystem {
     const ID: u8 = 0x1d;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         dst.put_slice(&self.payload);
         Ok(())
     }
@@ -241,7 +271,10 @@ pub struct EncapsulatedNak(pub AckNackPayload);
 impl Packet for EncapsulatedNak {
     const ID: u8 = 0xa0;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.0.encode_raknet(dst)
     }
 
@@ -255,7 +288,10 @@ pub struct EncapsulatedAck(pub AckNackPayload);
 impl Packet for EncapsulatedAck {
     const ID: u8 = 0xc0;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.0.encode_raknet(dst)
     }
 

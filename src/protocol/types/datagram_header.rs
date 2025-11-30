@@ -13,7 +13,10 @@ pub struct DatagramHeader {
 }
 
 impl RaknetEncodable for DatagramHeader {
-    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_raknet(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         dst.put_u8(self.flags.bits());
         self.sequence.encode_raknet(dst)
     }

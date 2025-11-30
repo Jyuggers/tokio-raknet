@@ -10,8 +10,8 @@
 //! The transport layer handles the actual UDP sockets and multiplexing
 //! multiple sessions over a single port (for the server).
 
-use std::net::SocketAddr;
 use bytes::Bytes;
+use std::net::SocketAddr;
 
 use crate::protocol::{packet::RaknetPacket, reliability::Reliability, state::RakPriority};
 

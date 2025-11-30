@@ -22,10 +22,7 @@ impl RaknetConnection {
         self.incoming.recv().await
     }
 
-    pub async fn send(
-        &self,
-        msg: impl Into<super::Message>,
-    ) -> Result<(), crate::RaknetError> {
+    pub async fn send(&self, msg: impl Into<super::Message>) -> Result<(), crate::RaknetError> {
         let msg = msg.into();
         let payload = msg.buffer;
 

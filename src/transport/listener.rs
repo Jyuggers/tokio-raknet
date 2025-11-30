@@ -39,12 +39,7 @@ impl RaknetListener {
         let (new_conn_tx, new_conn_rx) = mpsc::channel(32);
         let (outbound_tx, outbound_rx) = mpsc::channel(1024);
 
-        tokio::spawn(run_listener_muxer(
-            socket,
-            mtu,
-            new_conn_tx,
-            outbound_rx,
-        ));
+        tokio::spawn(run_listener_muxer(socket, mtu, new_conn_tx, outbound_rx));
 
         Ok(Self {
             local_addr,

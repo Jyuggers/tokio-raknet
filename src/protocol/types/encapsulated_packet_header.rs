@@ -72,7 +72,10 @@ impl EncapsulatedPacketHeader {
 }
 
 impl RaknetEncodable for EncapsulatedPacketHeader {
-    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_raknet(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         dst.put_u8(self.to_byte());
         Ok(())
     }

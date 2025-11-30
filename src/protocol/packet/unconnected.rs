@@ -17,7 +17,10 @@ pub struct UnconnectedPing {
 impl Packet for UnconnectedPing {
     const ID: u8 = 0x01;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.ping_time.encode_raknet(dst)?;
 
         self.magic.encode_raknet(dst)?;
@@ -44,7 +47,10 @@ pub struct UnconnectedPong {
 impl Packet for UnconnectedPong {
     const ID: u8 = 0x1c;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         self.ping_time.encode_raknet(dst)?;
         self.server_guid.encode_raknet(dst)?;
         self.magic.encode_raknet(dst)?;
@@ -71,7 +77,10 @@ pub struct UnconnectedPingOpenConnections {
 impl Packet for UnconnectedPingOpenConnections {
     const ID: u8 = 0x02;
 
-    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         dst.put_slice(&self.payload);
         Ok(())
     }

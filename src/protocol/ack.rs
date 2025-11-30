@@ -13,7 +13,10 @@ pub struct SequenceRange {
 }
 
 impl RaknetEncodable for SequenceRange {
-    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_raknet(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         let singleton = self.start == self.end;
         singleton.encode_raknet(dst)?;
         self.start.encode_raknet(dst)?;
@@ -84,7 +87,10 @@ pub struct AckNackPayload {
 }
 
 impl RaknetEncodable for AckNackPayload {
-    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_raknet(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         let total_records: usize = self.ranges.iter().map(|r| r.record_count()).sum();
         dst.put_u16(total_records as u16);
 

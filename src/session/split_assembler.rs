@@ -54,10 +54,7 @@ impl SplitAssembler {
 
         // If header says it's split, we MUST have split info.
         // If not, it's a malformed packet logic error or decode error.
-        let split = pkt
-            .split
-            .as_ref()
-            .ok_or(DecodeError::MissingSplitInfo)?;
+        let split = pkt.split.as_ref().ok_or(DecodeError::MissingSplitInfo)?;
 
         if split.count > self.max_parts {
             return Err(DecodeError::SplitTooLarge);

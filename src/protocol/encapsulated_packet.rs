@@ -57,7 +57,10 @@ impl EncapsulatedPacket {
 }
 
 impl RaknetEncodable for EncapsulatedPacket {
-    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+    fn encode_raknet(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         use crate::protocol::packet::EncodeError;
 
         // 1) flags byte
@@ -84,9 +87,9 @@ impl RaknetEncodable for EncapsulatedPacket {
         }
 
         if rel.is_ordered() || rel.is_sequenced() {
-            let idx = self.ordering_index.ok_or(
-                EncodeError::MissingOrderingIndex,
-            )?;
+            let idx = self
+                .ordering_index
+                .ok_or(EncodeError::MissingOrderingIndex)?;
             idx.encode_raknet(dst)?;
 
             let ch = self
@@ -97,10 +100,7 @@ impl RaknetEncodable for EncapsulatedPacket {
 
         // 4) split metadata
         if self.header.is_split {
-            let split = self
-                .split
-                .as_ref()
-                .ok_or(EncodeError::MissingSplitInfo)?;
+            let split = self.split.as_ref().ok_or(EncodeError::MissingSplitInfo)?;
             split.count.encode_raknet(dst)?;
             split.id.encode_raknet(dst)?;
             split.index.encode_raknet(dst)?;

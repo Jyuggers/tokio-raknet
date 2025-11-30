@@ -22,7 +22,10 @@ pub(super) async fn dispatch_datagram(
     peer: SocketAddr,
     sessions: &mut HashMap<SocketAddr, SessionState>,
     pending: &mut HashMap<SocketAddr, PendingConnection>,
-    new_conn_tx: &mpsc::Sender<(SocketAddr, mpsc::Receiver<Result<Bytes, crate::RaknetError>>)>,
+    new_conn_tx: &mpsc::Sender<(
+        SocketAddr,
+        mpsc::Receiver<Result<Bytes, crate::RaknetError>>,
+    )>,
 ) {
     if sessions.contains_key(&peer) {
         if !handle_incoming_udp(socket, mtu, bytes, peer, sessions, pending, new_conn_tx).await {
@@ -87,9 +90,15 @@ pub(super) async fn tick_sessions(
             // Inform app of disconnection if it was connected/announced
             if state.announced {
                 if let Some(reason) = state.managed.last_disconnect_reason() {
-                    let _ = state.to_app.send(Err(crate::RaknetError::Disconnected(reason))).await;
+                    let _ = state
+                        .to_app
+                        .send(Err(crate::RaknetError::Disconnected(reason)))
+                        .await;
                 } else {
-                    let _ = state.to_app.send(Err(crate::RaknetError::ConnectionClosed)).await;
+                    let _ = state
+                        .to_app
+                        .send(Err(crate::RaknetError::ConnectionClosed))
+                        .await;
                 }
             }
             dead.push(peer);
@@ -108,7 +117,10 @@ async fn handle_incoming_udp(
     peer: SocketAddr,
     sessions: &mut HashMap<SocketAddr, SessionState>,
     _pending: &mut HashMap<SocketAddr, PendingConnection>,
-    new_conn_tx: &mpsc::Sender<(SocketAddr, mpsc::Receiver<Result<Bytes, crate::RaknetError>>)>,
+    new_conn_tx: &mpsc::Sender<(
+        SocketAddr,
+        mpsc::Receiver<Result<Bytes, crate::RaknetError>>,
+    )>,
 ) -> bool {
     let mut slice = bytes;
     let dgram = match Datagram::decode(&mut slice) {
@@ -150,10 +162,7 @@ async fn handle_incoming_udp(
                 let mut buf = bytes::BytesMut::with_capacity(1 + payload.len());
                 buf.put_u8(id);
                 buf.extend_from_slice(&payload);
-                let _ = state
-                    .to_app
-                    .send(Ok(buf.freeze()))
-                    .await;
+                let _ = state.to_app.send(Ok(buf.freeze())).await;
             }
         }
         false
@@ -166,10 +175,16 @@ async fn handle_incoming_udp(
 
     if closed_after || matches!(state.managed.state(), ConnectionState::Closed) {
         if state.announced {
-             if let Some(reason) = state.managed.last_disconnect_reason() {
-                let _ = state.to_app.send(Err(crate::RaknetError::Disconnected(reason))).await;
+            if let Some(reason) = state.managed.last_disconnect_reason() {
+                let _ = state
+                    .to_app
+                    .send(Err(crate::RaknetError::Disconnected(reason)))
+                    .await;
             } else {
-                let _ = state.to_app.send(Err(crate::RaknetError::ConnectionClosed)).await;
+                let _ = state
+                    .to_app
+                    .send(Err(crate::RaknetError::ConnectionClosed))
+                    .await;
             }
         }
         sessions.remove(&peer);
@@ -180,7 +195,10 @@ async fn handle_incoming_udp(
 pub(super) async fn maybe_announce_connection(
     peer: SocketAddr,
     state: &mut SessionState,
-    new_conn_tx: &mpsc::Sender<(SocketAddr, mpsc::Receiver<Result<Bytes, crate::RaknetError>>)>,
+    new_conn_tx: &mpsc::Sender<(
+        SocketAddr,
+        mpsc::Receiver<Result<Bytes, crate::RaknetError>>,
+    )>,
 ) {
     if state.announced || !state.managed.is_connected() {
         tracing::trace!(
