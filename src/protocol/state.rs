@@ -5,33 +5,7 @@
 
 use bytes::{Buf, BufMut};
 
-use crate::protocol::packet::{DecodeError, RaknetEncodable};
-
-/// High-level connection state for an online RakNet session.
-#[repr(u8)]
-pub enum ConnState {
-    /// No connection established.
-    Unconnected,
-    /// Performing the connection handshake.
-    Connecting,
-    /// Connected and ready for user data.
-    Connect,
-    /// In the process of shutting down.
-    Disconnecting,
-    /// Connection fully torn down.
-    Disconnected,
-}
-
-/// Offline (pre-connection) handshake state.
-#[repr(u8)]
-pub enum OfflineState {
-    /// Initial unconnected ping handshake.
-    Handshake1,
-    /// MTU / connection request negotiation.
-    Handshake2,
-    /// Offline handshake completed.
-    HandshakeCompleted,
-}
+use crate::protocol::packet::{DecodeError, EncodeError, RaknetEncodable};
 
 /// Reason codes sent with certain disconnect/control packets.
 #[derive(Debug, Clone, Copy)]
@@ -51,8 +25,8 @@ pub enum DisconnectReason {
 }
 
 impl RaknetEncodable for DisconnectReason {
-    fn encode_raknet(&self, dst: &mut impl BufMut) {
-        (*self as u8).encode_raknet(dst);
+    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), EncodeError> {
+        (*self as u8).encode_raknet(dst)
     }
 
     fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {
@@ -82,6 +56,21 @@ pub enum Event {
     NewIncomingConnection,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum RakPriority {
+    Immediate = 0,
+    High = 1,
+    Normal = 2,
+    Low = 3,
+}
+
+impl RakPriority {
+    pub fn as_index(self) -> usize {
+        self as usize
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,16 +84,16 @@ mod tests {
             DisconnectReason::QueueTooLong,
         ] {
             let mut buf = BytesMut::new();
-            reason.encode_raknet(&mut buf);
+            reason.encode_raknet(&mut buf).unwrap();
             let mut slice = buf.freeze();
             let decoded = DisconnectReason::decode_raknet(&mut slice).unwrap();
             // encode as u8 again and compare discriminants
             let mut orig_buf = BytesMut::new();
-            reason.encode_raknet(&mut orig_buf);
+            reason.encode_raknet(&mut orig_buf).unwrap();
             let mut orig_slice = orig_buf.freeze();
             let orig_u8 = u8::decode_raknet(&mut orig_slice).unwrap();
             let mut dec_buf = BytesMut::new();
-            decoded.encode_raknet(&mut dec_buf);
+            decoded.encode_raknet(&mut dec_buf).unwrap();
             let mut dec_slice = dec_buf.freeze();
             let dec_u8 = u8::decode_raknet(&mut dec_slice).unwrap();
             assert_eq!(orig_u8, dec_u8);

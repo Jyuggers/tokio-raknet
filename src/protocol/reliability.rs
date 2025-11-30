@@ -4,7 +4,7 @@
 //! `reliability` in the Go reference implementation and will be ported
 //! here as Rust types become necessary.
 
-use crate::protocol::packet::{DecodeError, RaknetEncodable};
+use crate::protocol::packet::{DecodeError, EncodeError, RaknetEncodable};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -149,8 +149,8 @@ impl TryFrom<u8> for Reliability {
 }
 
 impl RaknetEncodable for Reliability {
-    fn encode_raknet(&self, dst: &mut impl bytes::BufMut) {
-        (*self as u8).encode_raknet(dst);
+    fn encode_raknet(&self, dst: &mut impl bytes::BufMut) -> Result<(), EncodeError> {
+        (*self as u8).encode_raknet(dst)
     }
 
     fn decode_raknet(src: &mut impl bytes::Buf) -> Result<Self, DecodeError> {
@@ -175,7 +175,7 @@ mod tests {
             Reliability::ReliableOrderedWithAckReceipt,
         ] {
             let mut buf = bytes::BytesMut::new();
-            r.encode_raknet(&mut buf);
+            r.encode_raknet(&mut buf).unwrap();
             let mut slice = buf.freeze();
             let decoded = Reliability::decode_raknet(&mut slice).unwrap();
             assert_eq!(decoded, r);

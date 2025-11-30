@@ -4,7 +4,7 @@ use crate::protocol::{
 };
 use bytes::{Buf, BufMut, Bytes};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SplitInfo {
     pub count: u32,
     pub id: u16,
@@ -12,7 +12,7 @@ pub struct SplitInfo {
 }
 
 /// Mirrors Cloudburst EncapsulatedPacket / Go Frame at a high level.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct EncapsulatedPacket {
     pub header: EncapsulatedPacketHeader, // reliability + split + needs_bas bits
     pub bit_length: u16,                  // bitSize from the wire
@@ -29,15 +29,42 @@ impl EncapsulatedPacket {
     pub fn payload_len(&self) -> usize {
         ((self.bit_length as usize) + 7) >> 3
     }
+
+    /// Total on-wire size (header + payload) of this encapsulated packet.
+    pub fn size(&self) -> usize {
+        // Base header: 1 byte flags + 2 bytes bit_length.
+        let mut size = 3usize;
+
+        let rel = self.header.reliability;
+        if rel.is_reliable() {
+            size += 3; // reliable_index
+        }
+        if rel.is_sequenced() {
+            size += 3; // sequence_index
+        }
+        if rel.is_ordered() || rel.is_sequenced() {
+            size += 3; // ordering_index
+            size += 1; // ordering_channel
+        }
+        if self.header.is_split {
+            size += 4; // partCount (u32)
+            size += 2; // partId (u16)
+            size += 4; // partIndex (u32)
+        }
+
+        size + self.payload_len()
+    }
 }
 
 impl RaknetEncodable for EncapsulatedPacket {
-    fn encode_raknet(&self, dst: &mut impl BufMut) {
+    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        use crate::protocol::packet::EncodeError;
+
         // 1) flags byte
-        self.header.encode_raknet(dst);
+        self.header.encode_raknet(dst)?;
 
         // 2) bit length
-        self.bit_length.encode_raknet(dst);
+        self.bit_length.encode_raknet(dst)?;
 
         // 3) reliability‑dependent indexes
         let rel = self.header.reliability;
@@ -45,27 +72,27 @@ impl RaknetEncodable for EncapsulatedPacket {
         if rel.is_reliable() {
             let idx = self
                 .reliable_index
-                .expect("reliable_index must be set when reliability.is_reliable()");
-            idx.encode_raknet(dst);
+                .ok_or(EncodeError::MissingReliableIndex)?;
+            idx.encode_raknet(dst)?;
         }
 
         if rel.is_sequenced() {
             let idx = self
                 .sequence_index
-                .expect("sequence_index must be set when reliability.is_sequenced()");
-            idx.encode_raknet(dst);
+                .ok_or(EncodeError::MissingSequenceIndex)?;
+            idx.encode_raknet(dst)?;
         }
 
         if rel.is_ordered() || rel.is_sequenced() {
-            let idx = self.ordering_index.expect(
-                "ordering_index must be set when reliability.is_ordered() || is_sequenced()",
-            );
-            idx.encode_raknet(dst);
+            let idx = self.ordering_index.ok_or(
+                EncodeError::MissingOrderingIndex,
+            )?;
+            idx.encode_raknet(dst)?;
 
             let ch = self
                 .ordering_channel
-                .expect("ordering_channel must be set when ordering/seq idx is present");
-            ch.encode_raknet(dst);
+                .ok_or(EncodeError::MissingOrderingChannel)?;
+            ch.encode_raknet(dst)?;
         }
 
         // 4) split metadata
@@ -73,14 +100,15 @@ impl RaknetEncodable for EncapsulatedPacket {
             let split = self
                 .split
                 .as_ref()
-                .expect("split info must be set when header.is_split is true");
-            split.count.encode_raknet(dst);
-            split.id.encode_raknet(dst);
-            split.index.encode_raknet(dst);
+                .ok_or(EncodeError::MissingSplitInfo)?;
+            split.count.encode_raknet(dst)?;
+            split.id.encode_raknet(dst)?;
+            split.index.encode_raknet(dst)?;
         }
 
         // 5) payload (assumed already correct length)
         dst.put_slice(&self.payload);
+        Ok(())
     }
 
     fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {

@@ -1,6 +1,21 @@
 use bytes::Bytes;
 use thiserror::Error;
 
+/// Errors that may occur while encoding RakNet protocol values or packets.
+#[derive(Error, Debug)]
+pub enum EncodeError {
+    #[error("Packet split info missing when header indicates split.")]
+    MissingSplitInfo,
+    #[error("Reliable index missing for reliable packet.")]
+    MissingReliableIndex,
+    #[error("Sequence index missing for sequenced packet.")]
+    MissingSequenceIndex,
+    #[error("Ordering index missing for ordered/sequenced packet.")]
+    MissingOrderingIndex,
+    #[error("Ordering channel missing for ordered/sequenced packet.")]
+    MissingOrderingChannel,
+}
+
 /// Errors that may occur while decoding RakNet protocol values or packets.
 ///
 /// This type is kept small and generic so it can be shared by all
@@ -41,4 +56,18 @@ pub enum DecodeError {
     UnknownDisconnectReason(u8),
     #[error("An unknown reliability value was provided. Reliability byte: {0}")]
     UnknownReliability(u8),
+    #[error("Invalid Ack Packet encountered.")]
+    InvalidAckPacket,
+    #[error("Packet split amount didn't match expected.")]
+    SplitCountMismatch,
+    #[error("Split index out of range.")]
+    SplitIndexOutOfRange,
+    #[error("Duplicate split part.")]
+    DuplicateSplitPart,
+    #[error("Split packet exceeds maximum supported parts.")]
+    SplitTooLarge,
+    #[error("Split reassembly buffer full.")]
+    SplitBufferFull,
+    #[error("Packet split info missing when header indicates split.")]
+    MissingSplitInfo,
 }

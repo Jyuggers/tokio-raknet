@@ -38,10 +38,11 @@ pub const MAXIMUM_ORDERING_CHANNELS: u8 = 16;
 /// Maximum size of an encapsulated packet header.
 pub const MAXIMUM_ENCAPSULATED_HEADER_SIZE: usize = 28;
 
+pub const MAX_ACK_SEQUENCES: u16 = 8192;
+
 /// Size of a UDP header on the wire.
 pub const UDP_HEADER_SIZE: usize = 8;
 
-/// Size of a RakNet datagram header on the wire.
 pub const RAKNET_DATAGRAM_HEADER_SIZE: usize = 4;
 
 // === Connection / session timing ===
@@ -74,7 +75,7 @@ bitflags! {
         const VALID          = 0b1000_0000;
         const ACK            = 0b0100_0000;
         const NACK           = 0b0010_0000;
-        const HAS_B_AND_AS   = 0b0010_0000; // Alias for NACK
+        const HAS_B_AND_AS   = 0b0000_0100;
     }
 }
 

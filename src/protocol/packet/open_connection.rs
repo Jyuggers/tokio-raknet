@@ -23,10 +23,11 @@ pub struct OpenConnectionRequest1 {
 impl Packet for OpenConnectionRequest1 {
     const ID: u8 = 0x05;
 
-    fn encode_body(&self, dst: &mut impl bytes::BufMut) {
-        self.magic.encode_raknet(dst);
-        self.protocol_version.encode_raknet(dst);
-        self.padding.encode_raknet(dst);
+    fn encode_body(&self, dst: &mut impl bytes::BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.magic.encode_raknet(dst)?;
+        self.protocol_version.encode_raknet(dst)?;
+        self.padding.encode_raknet(dst)?;
+        Ok(())
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
@@ -42,7 +43,7 @@ impl Packet for OpenConnectionRequest1 {
 #[derive(Debug, Clone)]
 pub struct OpenConnectionReply1 {
     pub magic: Magic,
-    pub server_guide: u64,
+    pub server_guid: u64,
     pub cookie: Option<u32>,
     pub mtu: u16,
 }
@@ -50,21 +51,22 @@ pub struct OpenConnectionReply1 {
 impl Packet for OpenConnectionReply1 {
     const ID: u8 = 0x06;
 
-    fn encode_body(&self, dst: &mut impl bytes::BufMut) {
-        self.magic.encode_raknet(dst);
-        self.server_guide.encode_raknet(dst);
-        (self.cookie.is_some() as u8 != 0).encode_raknet(dst); // security bool
+    fn encode_body(&self, dst: &mut impl bytes::BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.magic.encode_raknet(dst)?;
+        self.server_guid.encode_raknet(dst)?;
+        self.cookie.is_some().encode_raknet(dst)?; // security bool
         if self.cookie.is_some() {
-            self.cookie.unwrap().encode_raknet(dst);
+            self.cookie.unwrap().encode_raknet(dst)?;
         }
-        self.mtu.encode_raknet(dst);
+        self.mtu.encode_raknet(dst)?;
+        Ok(())
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
         Ok(Self {
             magic: Magic::decode_raknet(src)?,
-            server_guide: u64::decode_raknet(src)?,
-            cookie: if u8::decode_raknet(src)? != 0 {
+            server_guid: u64::decode_raknet(src)?,
+            cookie: if bool::decode_raknet(src)? {
                 Some(u32::decode_raknet(src)?)
             } else {
                 None
@@ -88,58 +90,47 @@ pub struct OpenConnectionRequest2 {
 impl Packet for OpenConnectionRequest2 {
     const ID: u8 = 0x07;
 
-    fn encode_body(&self, dst: &mut impl bytes::BufMut) {
-        self.magic.encode_raknet(dst);
-        (self.cookie.is_some() as u8 != 0).encode_raknet(dst); // security bool
-        if self.cookie.is_some() {
-            self.cookie.unwrap().encode_raknet(dst);
-            self.client_proof.encode_raknet(dst);
+    fn encode_body(&self, dst: &mut impl bytes::BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.magic.encode_raknet(dst)?;
+        if let Some(cookie) = self.cookie {
+            cookie.encode_raknet(dst)?;
+            self.client_proof.encode_raknet(dst)?;
         }
-        self.server_addr.encode_raknet(dst);
-        self.mtu.encode_raknet(dst);
-        self.client_guid.encode_raknet(dst);
+        self.server_addr.encode_raknet(dst)?;
+        self.mtu.encode_raknet(dst)?;
+        self.client_guid.encode_raknet(dst)?;
+        Ok(())
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
         let magic = Magic::decode_raknet(src)?;
+        let rest: Bytes = src.copy_to_bytes(src.remaining());
+        let mut cursor = &rest[..];
 
-        // Grab the remaining bytes into a temp buffer.
-        // Safely grab the remaining bytes without moving `src`.
-        let remaining = src.remaining();
-        let rest: Bytes = src.copy_to_bytes(remaining); // advances `src` by `remaining`
-
-        // First attempt: cookie + proof + addr + mtu + guid.
-        if remaining >= 5 {
-            let mut tmp = rest.clone();
-            let attempt = (|| -> Result<OpenConnectionRequest2, super::DecodeError> {
-                let cookie = u32::decode_raknet(&mut tmp)?;
-                let client_proof = bool::decode_raknet(&mut tmp)?;
-                let server_addr = SocketAddr::decode_raknet(&mut tmp)?;
-                let mtu = u16::decode_raknet(&mut tmp)?;
-                let client_guid = u64::decode_raknet(&mut tmp)?;
-                Ok(OpenConnectionRequest2 {
-                    magic,
-                    cookie: Some(cookie),
-                    client_proof,
-                    server_addr,
-                    mtu,
-                    client_guid,
-                })
-            })();
-            if attempt.is_ok() {
-                return attempt;
+        let mut cookie = None;
+        if let Some(&first) = cursor.first() {
+            if first != 4 && first != 6 {
+                if cursor.len() < 4 {
+                    return Err(super::DecodeError::UnexpectedEof);
+                }
+                cookie = Some(u32::from_be_bytes([
+                    cursor[0], cursor[1], cursor[2], cursor[3],
+                ]));
+                cursor = &cursor[4..];
+                if !cursor.is_empty() {
+                    cursor = &cursor[1..]; // skip reserved/client proof byte
+                }
             }
+        } else {
+            return Err(super::DecodeError::UnexpectedEof);
         }
 
-        // Fallback: addr + mtu + guid, no cookie/proof.
-        let mut tmp = rest.clone();
-        let server_addr = SocketAddr::decode_raknet(&mut tmp)?;
-        let mtu = u16::decode_raknet(&mut tmp)?;
-        let client_guid = u64::decode_raknet(&mut tmp)?;
-
-        Ok(OpenConnectionRequest2 {
+        let server_addr = SocketAddr::decode_raknet(&mut cursor)?;
+        let mtu = u16::decode_raknet(&mut cursor)?;
+        let client_guid = u64::decode_raknet(&mut cursor)?;
+        Ok(Self {
             magic,
-            cookie: None,
+            cookie,
             client_proof: false,
             server_addr,
             mtu,
@@ -161,12 +152,13 @@ pub struct OpenConnectionReply2 {
 impl Packet for OpenConnectionReply2 {
     const ID: u8 = 0x08;
 
-    fn encode_body(&self, dst: &mut impl BufMut) {
-        self.magic.encode_raknet(dst);
-        self.server_guid.encode_raknet(dst);
-        self.server_addr.encode_raknet(dst);
-        self.mtu.encode_raknet(dst);
-        self.security.encode_raknet(dst);
+    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.magic.encode_raknet(dst)?;
+        self.server_guid.encode_raknet(dst)?;
+        self.server_addr.encode_raknet(dst)?;
+        self.mtu.encode_raknet(dst)?;
+        self.security.encode_raknet(dst)?;
+        Ok(())
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
@@ -191,10 +183,11 @@ pub struct IncompatibleProtocolVersion {
 impl Packet for IncompatibleProtocolVersion {
     const ID: u8 = 0x19;
 
-    fn encode_body(&self, dst: &mut impl BufMut) {
-        self.protocol.encode_raknet(dst);
-        self.magic.encode_raknet(dst);
-        self.server_guid.encode_raknet(dst);
+    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.protocol.encode_raknet(dst)?;
+        self.magic.encode_raknet(dst)?;
+        self.server_guid.encode_raknet(dst)?;
+        Ok(())
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
@@ -216,9 +209,10 @@ pub struct AlreadyConnected {
 impl Packet for AlreadyConnected {
     const ID: u8 = 0x12;
 
-    fn encode_body(&self, dst: &mut impl BufMut) {
-        self.magic.encode_raknet(dst);
-        self.server_guid.encode_raknet(dst);
+    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.magic.encode_raknet(dst)?;
+        self.server_guid.encode_raknet(dst)?;
+        Ok(())
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
@@ -240,10 +234,11 @@ pub struct ConnectionRequest {
 impl Packet for ConnectionRequest {
     const ID: u8 = 0x09;
 
-    fn encode_body(&self, dst: &mut impl BufMut) {
-        self.server_guid.encode_raknet(dst);
-        self.timestamp.encode_raknet(dst);
-        self.secure.encode_raknet(dst);
+    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.server_guid.encode_raknet(dst)?;
+        self.timestamp.encode_raknet(dst)?;
+        self.secure.encode_raknet(dst)?;
+        Ok(())
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
@@ -268,16 +263,17 @@ pub struct ConnectionRequestAccepted {
 impl Packet for ConnectionRequestAccepted {
     const ID: u8 = 0x10;
 
-    fn encode_body(&self, dst: &mut impl BufMut) {
-        self.address.encode_raknet(dst);
-        self.system_index.encode_raknet(dst);
+    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.address.encode_raknet(dst)?;
+        self.system_index.encode_raknet(dst)?;
 
         for address in &self.system_addresses {
-            address.encode_raknet(dst);
+            address.encode_raknet(dst)?;
         }
 
-        self.request_timestamp.encode_raknet(dst);
-        self.accepted_timestamp.encode_raknet(dst);
+        self.request_timestamp.encode_raknet(dst)?;
+        self.accepted_timestamp.encode_raknet(dst)?;
+        Ok(())
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
@@ -313,9 +309,10 @@ pub struct ConnectionRequestFailed {
 impl Packet for ConnectionRequestFailed {
     const ID: u8 = 0x11;
 
-    fn encode_body(&self, dst: &mut impl BufMut) {
-        self.magic.encode_raknet(dst);
-        self.server_guid.encode_raknet(dst);
+    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.magic.encode_raknet(dst)?;
+        self.server_guid.encode_raknet(dst)?;
+        Ok(())
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
@@ -338,13 +335,14 @@ pub struct NewIncomingConnection {
 impl Packet for NewIncomingConnection {
     const ID: u8 = 0x13;
 
-    fn encode_body(&self, dst: &mut impl BufMut) {
-        self.server_address.encode_raknet(dst);
+    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.server_address.encode_raknet(dst)?;
         for address in &self.system_addresses {
-            address.encode_raknet(dst);
+            address.encode_raknet(dst)?;
         }
-        self.request_timestamp.encode_raknet(dst);
-        self.accepted_timestamp.encode_raknet(dst);
+        self.request_timestamp.encode_raknet(dst)?;
+        self.accepted_timestamp.encode_raknet(dst)?;
+        Ok(())
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
@@ -380,7 +378,7 @@ mod tests {
             secure: true,
         };
         let mut buf = BytesMut::new();
-        pkt.encode_body(&mut buf);
+        pkt.encode_body(&mut buf).unwrap();
         let mut slice = buf.freeze();
         let decoded = ConnectionRequest::decode_body(&mut slice).unwrap();
         assert_eq!(decoded.server_guid, pkt.server_guid);

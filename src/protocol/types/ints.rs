@@ -1,15 +1,16 @@
 use bytes::{Buf, BufMut};
 use std::mem;
 
-use crate::protocol::packet::{DecodeError, RaknetEncodable};
+use crate::protocol::packet::{DecodeError, EncodeError, RaknetEncodable};
 
 /// Internal helper macro implementing big-endian integer encoding/decoding
 /// for a concrete integer type.
 macro_rules! impl_raknet_int {
     ($ty:ty, $put:ident, $get:ident) => {
         impl RaknetEncodable for $ty {
-            fn encode_raknet(&self, dst: &mut impl BufMut) {
+            fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), EncodeError> {
                 dst.$put(*self as _);
+                Ok(())
             }
 
             fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {
@@ -37,8 +38,9 @@ impl_raknet_int!(i64, put_i64, get_i64);
 pub struct U16LE(pub u16);
 
 impl RaknetEncodable for U16LE {
-    fn encode_raknet(&self, dst: &mut impl BufMut) {
+    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), EncodeError> {
         dst.put_u16_le(self.0);
+        Ok(())
     }
 
     fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {
@@ -53,12 +55,13 @@ impl RaknetEncodable for U16LE {
 pub struct U24LE(pub u32);
 
 impl RaknetEncodable for U24LE {
-    fn encode_raknet(&self, dst: &mut impl BufMut) {
+    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), EncodeError> {
         let v = self.0;
         // 3-byte little-endian
         dst.put_u8((v & 0xFF) as u8);
         dst.put_u8(((v >> 8) & 0xFF) as u8);
         dst.put_u8(((v >> 16) & 0xFF) as u8);
+        Ok(())
     }
 
     fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {
@@ -81,7 +84,7 @@ mod tests {
     fn u16le_roundtrip() {
         let value = U16LE(0xABCD);
         let mut buf = BytesMut::new();
-        value.encode_raknet(&mut buf);
+        value.encode_raknet(&mut buf).unwrap();
         let mut slice = buf.freeze();
         let decoded = U16LE::decode_raknet(&mut slice).unwrap();
         assert_eq!(decoded.0, value.0);
@@ -91,11 +94,9 @@ mod tests {
     fn u24le_roundtrip() {
         let value = U24LE(0x00FFEE);
         let mut buf = BytesMut::new();
-        value.encode_raknet(&mut buf);
+        value.encode_raknet(&mut buf).unwrap();
         let mut slice = buf.freeze();
         let decoded = U24LE::decode_raknet(&mut slice).unwrap();
         assert_eq!(decoded.0, value.0);
     }
 }
-
-

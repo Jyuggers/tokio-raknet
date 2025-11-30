@@ -1,10 +1,10 @@
 use bytes::{Buf, BufMut};
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
-use crate::protocol::packet::{DecodeError, RaknetEncodable};
+use crate::protocol::packet::{DecodeError, EncodeError, RaknetEncodable};
 
 impl RaknetEncodable for SocketAddr {
-    fn encode_raknet(&self, dst: &mut impl BufMut) {
+    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), EncodeError> {
         match self {
             SocketAddr::V4(addr) => {
                 dst.put_u8(4); // Version 4
@@ -12,8 +12,7 @@ impl RaknetEncodable for SocketAddr {
                 // Get the raw IP bytes
                 let ip_bytes = addr.ip().octets();
 
-                let flipped_ip: [u8; 4] =
-                    [!ip_bytes[0], !ip_bytes[1], !ip_bytes[2], !ip_bytes[3]];
+                let flipped_ip: [u8; 4] = [!ip_bytes[0], !ip_bytes[1], !ip_bytes[2], !ip_bytes[3]];
 
                 dst.put_slice(&flipped_ip);
                 dst.put_u16(addr.port());
@@ -30,6 +29,7 @@ impl RaknetEncodable for SocketAddr {
                 dst.put_u32(addr.scope_id()); // sin6_scope_id
             }
         }
+        Ok(())
     }
 
     fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {
@@ -90,13 +90,14 @@ mod tests {
     use bytes::BytesMut;
 
     #[test]
-    fn ipv4_roundtrip() {
+    fn ipv4_roundtrip() -> Result<(), DecodeError> {
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 19132));
         let mut buf = BytesMut::new();
-        addr.encode_raknet(&mut buf);
+        addr.encode_raknet(&mut buf).unwrap();
         let mut slice = buf.freeze();
-        let decoded = SocketAddr::decode_raknet(&mut slice).unwrap();
+        let decoded = SocketAddr::decode_raknet(&mut slice)?;
         assert_eq!(decoded, addr);
+        Ok(())
     }
 
     #[test]
@@ -110,5 +111,3 @@ mod tests {
         }
     }
 }
-
-

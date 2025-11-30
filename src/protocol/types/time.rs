@@ -8,8 +8,8 @@ use crate::protocol::packet::{DecodeError, RaknetEncodable};
 pub struct RaknetTime(pub u64); // ms on wire
 
 impl RaknetEncodable for RaknetTime {
-    fn encode_raknet(&self, dst: &mut impl BufMut) {
-        self.0.encode_raknet(dst);
+    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.0.encode_raknet(dst)
     }
 
     fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {
@@ -32,7 +32,7 @@ mod tests {
     fn raknet_time_roundtrip_and_conversion() {
         let value = RaknetTime(1234);
         let mut buf = BytesMut::new();
-        value.encode_raknet(&mut buf);
+        value.encode_raknet(&mut buf).unwrap();
         let mut slice = buf.freeze();
         let decoded = RaknetTime::decode_raknet(&mut slice).unwrap();
         assert_eq!(decoded.0, value.0);

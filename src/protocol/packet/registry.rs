@@ -2,14 +2,7 @@ use bytes::{Buf, BufMut, BytesMut};
 
 use crate::protocol::packet::{DecodeError, Packet};
 
-use crate::protocol::packet::{
-    AlreadyConnected, AdvertiseSystem, ConnectionBanned, ConnectionLost, ConnectionRequest,
-    ConnectionRequestAccepted, ConnectionRequestFailed, ConnectedPing, ConnectedPong,
-    DetectLostConnection, DisconnectionNotification, IncompatibleProtocolVersion,
-    IpRecentlyConnected, NewIncomingConnection, NoFreeIncomingConnections, OpenConnectionReply1,
-    OpenConnectionReply2, OpenConnectionRequest1, OpenConnectionRequest2, Timestamp,
-    UnconnectedPing, UnconnectedPingOpenConnections, UnconnectedPong,
-};
+use crate::protocol::packet::*;
 
 /// INTERNAL
 /// Macro used to generate the `RaknetPacket` enum type
@@ -47,12 +40,11 @@ macro_rules! define_raknet_packets {
                             RaknetPacket::$name(<$name as Packet>::decode_body(src)?)
                         }
                     )+
-                    other if other >= 0x80 => {
+                    other => {
                         let mut tmp = BytesMut::with_capacity(src.remaining());
                         tmp.put(src);
                         RaknetPacket::UserData { id: other, payload: tmp.freeze() }
                     }
-                    other => return Err(DecodeError::UnknownId(other)),
                 })
             }
 
@@ -67,14 +59,15 @@ macro_rules! define_raknet_packets {
             }
 
             /// Encode a packet into the destination buffer (ID byte + body).
-            pub fn encode(&self, dst: &mut impl BufMut) {
+            pub fn encode(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
                 dst.put_u8(self.id());
                 match self {
                     $(
-                        RaknetPacket::$name(inner) => inner.encode_body(dst),
+                        RaknetPacket::$name(inner) => inner.encode_body(dst)?,
                     )+
                     RaknetPacket::UserData { payload, .. } => dst.put_slice(payload),
                 }
+                Ok(())
             }
         }
     }
@@ -104,13 +97,17 @@ define_raknet_packets! {
     IpRecentlyConnected,
     Timestamp,
     AdvertiseSystem,
+    // These might not be needed
+    // Idk if mc raknet does this behavior or only uses datagram level acks and naks.
+    EncapsulatedNak,
+    EncapsulatedAck,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::BytesMut;
     use crate::protocol::types::RaknetTime;
+    use bytes::BytesMut;
 
     #[test]
     fn connected_ping_roundtrip_via_enum() {
@@ -119,7 +116,7 @@ mod tests {
         });
 
         let mut buf = BytesMut::new();
-        pkt.encode(&mut buf);
+        pkt.encode(&mut buf).unwrap();
         let mut slice = buf.freeze();
         let decoded = RaknetPacket::decode(&mut slice).unwrap();
 
@@ -143,7 +140,10 @@ mod tests {
         let decoded = RaknetPacket::decode(&mut slice).unwrap();
 
         match decoded {
-            RaknetPacket::UserData { id: got_id, payload: body } => {
+            RaknetPacket::UserData {
+                id: got_id,
+                payload: body,
+            } => {
                 assert_eq!(got_id, id);
                 assert_eq!(&body[..], &payload[..]);
             }
@@ -151,5 +151,3 @@ mod tests {
         }
     }
 }
-
-

@@ -72,8 +72,9 @@ impl EncapsulatedPacketHeader {
 }
 
 impl RaknetEncodable for EncapsulatedPacketHeader {
-    fn encode_raknet(&self, dst: &mut impl BufMut) {
+    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
         dst.put_u8(self.to_byte());
+        Ok(())
     }
 
     fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {
@@ -114,7 +115,7 @@ mod tests {
     fn roundtrip_via_raknetencodable() {
         let header = EncapsulatedPacketHeader::new(Reliability::ReliableOrdered, true, true);
         let mut buf = BytesMut::new();
-        header.encode_raknet(&mut buf);
+        header.encode_raknet(&mut buf).unwrap();
         let mut slice = buf.freeze();
         let decoded = EncapsulatedPacketHeader::decode_raknet(&mut slice).unwrap();
         assert_eq!(decoded, header);

@@ -1,0 +1,68 @@
+use std::time::{Duration, Instant};
+
+use bytes::BytesMut;
+use tokio::net::UdpSocket;
+use tokio::time::{self, Interval, MissedTickBehavior};
+
+use crate::session::manager::ManagedSession;
+
+const TICK_INTERVAL_MS: u64 = 50;
+
+pub fn new_tick_interval() -> Interval {
+    let mut tick = time::interval(Duration::from_millis(TICK_INTERVAL_MS));
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    tick
+}
+
+/// Flushes any pending maintenance and outbound datagrams for a managed session.
+pub async fn flush_managed(
+    managed: &mut ManagedSession,
+    socket: &UdpSocket,
+    peer: std::net::SocketAddr,
+    now: Instant,
+) {
+    for d in managed.on_tick(now) {
+        trace_send(peer, &d);
+        let mut out = BytesMut::new();
+        d.encode(&mut out).expect("Bad datagram in queue.");
+        let _ = socket.send_to(&out, peer).await;
+    }
+
+    while let Some(d) = managed.build_datagram(now) {
+        trace_send(peer, &d);
+        let mut out = BytesMut::new();
+        d.encode(&mut out).expect("Bad datagram in queue.");
+        let _ = socket.send_to(&out, peer).await;
+    }
+}
+
+fn trace_send(peer: std::net::SocketAddr, d: &crate::protocol::datagram::Datagram) {
+    if !tracing::enabled!(tracing::Level::TRACE) {
+        return;
+    }
+    let flags = d.header.flags.bits();
+    let kind = match &d.payload {
+        crate::protocol::datagram::DatagramPayload::EncapsulatedPackets(pkts) => {
+            let ids: Vec<u8> = pkts
+                .iter()
+                .filter_map(|enc| {
+                    let mut buf = enc.payload.clone();
+                    crate::protocol::packet::RaknetPacket::decode(&mut buf)
+                        .ok()
+                        .map(|p| p.id())
+                })
+                .collect();
+            format!("data ids={ids:?}")
+        }
+        crate::protocol::datagram::DatagramPayload::Ack(_) => "ack".to_string(),
+        crate::protocol::datagram::DatagramPayload::Nak(_) => "nak".to_string(),
+    };
+
+    tracing::trace!(
+        peer = %peer,
+        flags = format_args!("0x{:02x}", flags),
+        seq = d.header.sequence.value(),
+        kind = %kind,
+        "send_datagram"
+    );
+}

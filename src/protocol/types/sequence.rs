@@ -1,13 +1,16 @@
 use std::ops::Add;
 
-use crate::protocol::{packet::RaknetEncodable, types::U24LE};
+use crate::protocol::{
+    packet::{EncodeError, RaknetEncodable},
+    types::U24LE,
+};
 
 const MODULO: u32 = 1 << 24;
 const MASK: u32 = MODULO - 1;
 const HALF: u32 = MODULO / 2;
 
 /// Sequence type for a U24.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct Sequence24(u32);
 
 impl Sequence24 {
@@ -28,17 +31,34 @@ impl Sequence24 {
     pub fn prev(&self) -> Sequence24 {
         Sequence24(if self.0 == 0 { MASK } else { self.0 - 1 })
     }
+
+    pub fn distance_to(&self, newer: Sequence24) -> u32 {
+        let current = self.value();
+        let target = newer.value();
+        if target >= current {
+            target - current
+        } else {
+            (MODULO - current) + target
+        }
+    }
 }
 
 impl Ord for Sequence24 {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let mut d = (other.value() - self.value()) as i32;
-        if d > HALF as i32 {
-            d -= MODULO as i32;
-        } else if d < -(HALF as i32) {
-            d += MODULO as i32;
+        let a = self.value() as i32;
+        let b = other.value() as i32;
+        // This is the delta: a - b
+        let d = a.wrapping_sub(b);
+
+        if d == 0 {
+            std::cmp::Ordering::Equal
+        } else if (d > 0 && d < (HALF as i32)) || (d < 0 && d < -(HALF as i32)) {
+            // `a` is newer (greater)
+            std::cmp::Ordering::Greater
+        } else {
+            // `a` is older (less)
+            std::cmp::Ordering::Less
         }
-        d.cmp(&0)
     }
 }
 
@@ -93,8 +113,8 @@ impl From<U24LE> for Sequence24 {
 }
 
 impl RaknetEncodable for Sequence24 {
-    fn encode_raknet(&self, dst: &mut impl bytes::BufMut) {
-        U24LE::from(self).encode_raknet(dst);
+    fn encode_raknet(&self, dst: &mut impl bytes::BufMut) -> Result<(), EncodeError> {
+        U24LE::from(self).encode_raknet(dst)
     }
 
     fn decode_raknet(
@@ -116,8 +136,22 @@ mod tests {
 
     #[test]
     fn ordering_handles_wrap() {
-        let a = Sequence24::new(MASK);
-        let b = a.next();
+        let a = Sequence24::new(MASK); // "Old" packet
+        let b = a.next(); // "New" packet (0)
+        let c = b.next(); // "Newer" packet (1)
+
+        // 1 is greater (newer) than 0.
+        assert!(c > b);
+        // 0 is greater (newer) than MASK.
         assert!(b > a);
+        // 1 is greater (newer) than MASK.
+        assert!(c > a);
+    }
+
+    #[test]
+    fn negative_wrapping_add() {
+        let a = Sequence24::new(0);
+        let b = a + (-5i32);
+        assert_eq!(b.value(), MASK - 4); // Should wrap to near max
     }
 }

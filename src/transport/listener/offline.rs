@@ -1,0 +1,221 @@
+use std::{
+    collections::hash_map::DefaultHasher,
+    hash::{Hash, Hasher},
+    net::SocketAddr,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
+
+use bytes::{Bytes, BytesMut};
+use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
+
+use super::online::maybe_announce_connection;
+use crate::protocol::{
+    constants::{
+        DEFAULT_UNCONNECTED_MAGIC, MAXIMUM_MTU_SIZE, MINIMUM_MTU_SIZE, RAKNET_PROTOCOL_VERSION,
+        UDP_HEADER_SIZE,
+    },
+    packet::{
+        AlreadyConnected, IncompatibleProtocolVersion, OpenConnectionReply1, OpenConnectionReply2,
+        RaknetPacket, UnconnectedPong,
+    },
+};
+use crate::session::manager::{ManagedSession, SessionConfig, SessionRole};
+use crate::transport::listener_conn::SessionState;
+
+/// Pending offline handshake state.
+pub(super) struct PendingConnection {
+    pub mtu: u16,
+    pub expires_at: Instant,
+    pub cookie: u32,
+}
+
+pub(super) fn is_offline_packet_id(id: u8) -> bool {
+    matches!(id, 0x01 | 0x05 | 0x07)
+}
+
+pub(super) fn server_session_config() -> SessionConfig {
+    SessionConfig {
+        role: SessionRole::Server,
+        guid: server_guid(),
+        ..SessionConfig::default()
+    }
+}
+
+pub(super) async fn handle_offline(
+    socket: &UdpSocket,
+    _mtu: usize,
+    bytes: &[u8],
+    peer: SocketAddr,
+    sessions: &mut std::collections::HashMap<SocketAddr, SessionState>,
+    pending: &mut std::collections::HashMap<SocketAddr, PendingConnection>,
+    new_conn_tx: &mpsc::Sender<(
+        SocketAddr,
+        mpsc::Receiver<Result<Bytes, crate::RaknetError>>,
+    )>,
+) {
+    let now = Instant::now();
+    pending.retain(|_, p| p.expires_at > now);
+
+    let mut slice = bytes;
+    let pkt = match RaknetPacket::decode(&mut slice) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    match pkt {
+        RaknetPacket::UnconnectedPing(req) => {
+            if req.magic != DEFAULT_UNCONNECTED_MAGIC {
+                return;
+            }
+
+            let reply = RaknetPacket::UnconnectedPong(UnconnectedPong {
+                ping_time: req.ping_time,
+                server_guid: server_guid(),
+                magic: DEFAULT_UNCONNECTED_MAGIC,
+                advertisement: crate::protocol::types::Advertisement(None),
+            });
+
+            send_unconnected_packet(socket, peer, reply).await;
+        }
+        RaknetPacket::OpenConnectionRequest1(req) => {
+            if req.magic != DEFAULT_UNCONNECTED_MAGIC {
+                return;
+            }
+
+            if req.protocol_version != RAKNET_PROTOCOL_VERSION {
+                let reply =
+                    RaknetPacket::IncompatibleProtocolVersion(IncompatibleProtocolVersion {
+                        protocol: RAKNET_PROTOCOL_VERSION,
+                        magic: DEFAULT_UNCONNECTED_MAGIC,
+                        server_guid: server_guid(),
+                    });
+                send_unconnected_packet(socket, peer, reply).await;
+                return;
+            }
+
+            let ip_header = if peer.is_ipv4() { 20 } else { 40 };
+            let padding_len = req.padding.0;
+            let mtu_guess =
+                padding_len + 1 + DEFAULT_UNCONNECTED_MAGIC.len() + 1 + ip_header + UDP_HEADER_SIZE;
+            let mtu_clamped = clamp_mtu(mtu_guess as u16, MINIMUM_MTU_SIZE, MAXIMUM_MTU_SIZE);
+            let cookie = generate_cookie(peer);
+
+            if pending.len() >= super::MAX_PENDING_CONNECTIONS {
+                return;
+            }
+
+            pending.insert(
+                peer,
+                PendingConnection {
+                    mtu: mtu_clamped,
+                    expires_at: now + Duration::from_secs(10),
+                    cookie,
+                },
+            );
+
+            let reply = RaknetPacket::OpenConnectionReply1(OpenConnectionReply1 {
+                magic: DEFAULT_UNCONNECTED_MAGIC,
+                server_guid: server_guid(),
+                cookie: Some(cookie),
+                mtu: mtu_clamped,
+            });
+
+            send_unconnected_packet(socket, peer, reply).await;
+        }
+        RaknetPacket::OpenConnectionRequest2(req) => {
+            if req.magic != DEFAULT_UNCONNECTED_MAGIC {
+                return;
+            }
+
+            let pc = match pending.remove(&peer) {
+                Some(pc) => pc,
+                None => return,
+            };
+
+            if req.cookie != Some(pc.cookie) {
+                return;
+            }
+
+            if req.mtu < MINIMUM_MTU_SIZE || req.mtu > MAXIMUM_MTU_SIZE {
+                send_already_connected(socket, peer).await;
+                return;
+            }
+
+            let mtu_final = pc.mtu.min(req.mtu);
+
+            let (tx, rx) = mpsc::channel::<Result<Bytes, crate::RaknetError>>(128);
+            let config = server_session_config();
+            let managed = ManagedSession::with_config(peer, mtu_final as usize, now, config);
+            sessions.insert(
+                peer,
+                SessionState {
+                    managed,
+                    to_app: tx,
+                    pending_rx: Some(rx),
+                    announced: false,
+                },
+            );
+            if let Some(state) = sessions.get_mut(&peer) {
+                maybe_announce_connection(peer, state, new_conn_tx).await;
+            }
+
+            // Fallback to peer address if local address cannot be determined.
+            // This is a best-effort approach to avoid crashing.
+            let server_addr = socket.local_addr().unwrap_or(peer);
+
+            let reply = RaknetPacket::OpenConnectionReply2(OpenConnectionReply2 {
+                magic: DEFAULT_UNCONNECTED_MAGIC,
+                server_guid: server_guid(),
+                server_addr,
+                mtu: mtu_final,
+                security: false,
+            });
+
+            send_unconnected_packet(socket, peer, reply).await;
+        }
+        _ => {}
+    }
+}
+
+fn clamp_mtu(v: u16, min: u16, max: u16) -> u16 {
+    v.clamp(min, max)
+}
+
+fn generate_cookie(peer: SocketAddr) -> u32 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let mut hasher = DefaultHasher::new();
+    peer.hash(&mut hasher);
+    if let Ok(duration) = SystemTime::now().duration_since(UNIX_EPOCH) {
+        hasher.write_u64(duration.as_nanos() as u64);
+    }
+    (hasher.finish() & 0xffff_ffff) as u32
+}
+
+fn server_guid() -> u64 {
+    static GUID: OnceLock<u64> = OnceLock::new();
+    *GUID.get_or_init(|| {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0x1234_5678_9abc_def0)
+    })
+}
+
+async fn send_unconnected_packet(socket: &UdpSocket, peer: SocketAddr, pkt: RaknetPacket) {
+    let mut buf = BytesMut::new();
+    if pkt.encode(&mut buf).is_ok() {
+        let _ = socket.send_to(&buf, peer).await;
+    }
+}
+
+async fn send_already_connected(socket: &UdpSocket, peer: SocketAddr) {
+    let pkt = RaknetPacket::AlreadyConnected(AlreadyConnected {
+        magic: DEFAULT_UNCONNECTED_MAGIC,
+        server_guid: server_guid(),
+    });
+    send_unconnected_packet(socket, peer, pkt).await;
+}

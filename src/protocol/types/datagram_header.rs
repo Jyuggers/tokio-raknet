@@ -6,18 +6,19 @@ use crate::protocol::{
     types::Sequence24,
 };
 
+#[derive(Debug, Clone)]
 pub struct DatagramHeader {
     pub flags: DatagramFlags,
     pub sequence: Sequence24,
 }
 
-impl DatagramHeader {
-    pub fn encode(&self, dst: &mut impl BufMut) {
+impl RaknetEncodable for DatagramHeader {
+    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
         dst.put_u8(self.flags.bits());
-        self.sequence.encode_raknet(dst);
+        self.sequence.encode_raknet(dst)
     }
 
-    pub fn decode(src: &mut impl Buf) -> Result<Self, DecodeError> {
+    fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {
         if src.remaining() < 4 {
             return Err(DecodeError::UnexpectedEof);
         }
@@ -25,5 +26,14 @@ impl DatagramHeader {
         let flags = DatagramFlags::from_bits_truncate(raw_flags);
         let sequence = Sequence24::decode_raknet(src)?;
         Ok(DatagramHeader { flags, sequence })
+    }
+}
+
+impl Default for DatagramHeader {
+    fn default() -> Self {
+        Self {
+            flags: DatagramFlags::empty(),
+            sequence: Sequence24::new(0),
+        }
     }
 }

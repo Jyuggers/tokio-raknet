@@ -1,6 +1,6 @@
 use bytes::{Buf, BufMut};
 
-use crate::protocol::packet::{DecodeError, RaknetEncodable};
+use crate::protocol::packet::{DecodeError, EncodeError, RaknetEncodable};
 
 /// End-of-buffer padding – consumes or emits zero bytes up to the end.
 ///
@@ -10,8 +10,9 @@ use crate::protocol::packet::{DecodeError, RaknetEncodable};
 pub struct EoBPadding(pub usize);
 
 impl RaknetEncodable for EoBPadding {
-    fn encode_raknet(&self, dst: &mut impl BufMut) {
+    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), EncodeError> {
         dst.put_bytes(0, self.0);
+        Ok(())
     }
 
     fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {
@@ -35,5 +36,3 @@ mod tests {
         assert_eq!(slice.remaining(), 0);
     }
 }
-
-

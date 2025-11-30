@@ -17,10 +17,11 @@ pub struct UnconnectedPing {
 impl Packet for UnconnectedPing {
     const ID: u8 = 0x01;
 
-    fn encode_body(&self, dst: &mut impl BufMut) {
-        self.ping_time.encode_raknet(dst);
+    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.ping_time.encode_raknet(dst)?;
 
-        self.magic.encode_raknet(dst);
+        self.magic.encode_raknet(dst)?;
+        Ok(())
     }
 
     fn decode_body(src: &mut impl Buf) -> Result<Self, super::DecodeError> {
@@ -43,11 +44,12 @@ pub struct UnconnectedPong {
 impl Packet for UnconnectedPong {
     const ID: u8 = 0x1c;
 
-    fn encode_body(&self, dst: &mut impl BufMut) {
-        self.ping_time.encode_raknet(dst);
-        self.server_guid.encode_raknet(dst);
-        self.magic.encode_raknet(dst);
-        self.advertisement.encode_raknet(dst);
+    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.ping_time.encode_raknet(dst)?;
+        self.server_guid.encode_raknet(dst)?;
+        self.magic.encode_raknet(dst)?;
+        self.advertisement.encode_raknet(dst)?;
+        Ok(())
     }
 
     fn decode_body(src: &mut impl Buf) -> Result<Self, super::DecodeError> {
@@ -69,8 +71,9 @@ pub struct UnconnectedPingOpenConnections {
 impl Packet for UnconnectedPingOpenConnections {
     const ID: u8 = 0x02;
 
-    fn encode_body(&self, dst: &mut impl BufMut) {
+    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), crate::protocol::packet::EncodeError> {
         dst.put_slice(&self.payload);
+        Ok(())
     }
 
     fn decode_body(src: &mut impl Buf) -> Result<Self, super::DecodeError> {
@@ -96,7 +99,7 @@ mod tests {
             magic: [0x23; 16],
         };
         let mut buf = BytesMut::new();
-        pkt.encode_body(&mut buf);
+        pkt.encode_body(&mut buf).unwrap();
         let mut slice = buf.freeze();
         let decoded = UnconnectedPing::decode_body(&mut slice).unwrap();
         assert_eq!(decoded.ping_time.0, pkt.ping_time.0);
@@ -112,7 +115,7 @@ mod tests {
             advertisement: Advertisement(None),
         };
         let mut buf = BytesMut::new();
-        pkt.encode_body(&mut buf);
+        pkt.encode_body(&mut buf).unwrap();
         let mut slice = buf.freeze();
         let decoded = UnconnectedPong::decode_body(&mut slice).unwrap();
         assert_eq!(decoded.ping_time.0, pkt.ping_time.0);

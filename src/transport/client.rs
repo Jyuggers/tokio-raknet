@@ -1,0 +1,537 @@
+use std::net::SocketAddr;
+use std::time::{Duration, Instant};
+
+use bytes::{BufMut, Bytes, BytesMut};
+use tokio::net::UdpSocket;
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::{self, MissedTickBehavior, timeout};
+
+use crate::protocol::{
+    constants::{
+        DEFAULT_UNCONNECTED_MAGIC, MAXIMUM_MTU_SIZE, MINIMUM_MTU_SIZE, RAKNET_PROTOCOL_VERSION,
+        UDP_HEADER_SIZE,
+    },
+    datagram::Datagram,
+    packet::RaknetPacket,
+    types::EoBPadding,
+};
+use crate::session::manager::{ConnectionState, ManagedSession, SessionConfig, SessionRole};
+
+use super::OutboundMsg;
+
+const TICK_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Client-side RakNet connection over a single UDP socket and managed session.
+pub struct RaknetClient {
+    server: SocketAddr,
+    incoming: mpsc::Receiver<Result<Bytes, crate::RaknetError>>,
+    outbound_tx: mpsc::Sender<OutboundMsg>,
+}
+
+impl RaknetClient {
+    /// Connect to a RakNet server at the given address using the provided MTU.
+    pub async fn connect(server: SocketAddr, mtu: usize) -> Result<Self, crate::RaknetError> {
+        let socket = UdpSocket::bind("0.0.0.0:0").await?;
+
+        // Perform offline handshake using OpenConnectionRequest1/2.
+        let client_guid = client_guid();
+        let handshake = perform_offline_handshake(&socket, server, mtu, client_guid).await?;
+
+        let (outbound_tx, outbound_rx) = mpsc::channel::<OutboundMsg>(1024);
+        let (to_app_tx, to_app_rx) = mpsc::channel::<Result<Bytes, crate::RaknetError>>(128);
+        let (ready_tx, ready_rx) = oneshot::channel();
+
+        let context = ClientMuxerContext {
+            server,
+            mtu: handshake.mtu as usize,
+            server_guid: handshake.server_guid,
+            client_guid,
+            outbound_rx,
+            to_app: to_app_tx,
+            ready: ready_tx,
+        };
+
+        tokio::spawn(run_client_muxer(socket, context));
+
+        match ready_rx.await {
+            Ok(Ok(())) => Ok(Self {
+                server,
+                incoming: to_app_rx,
+                outbound_tx,
+            }),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(crate::RaknetError::ConnectionAborted),
+        }
+    }
+
+    pub async fn recv(&mut self) -> Option<Result<Bytes, crate::RaknetError>> {
+        self.incoming.recv().await
+    }
+
+    pub async fn send(&self, msg: impl Into<super::Message>) -> Result<(), crate::RaknetError> {
+        let msg = msg.into();
+        let bytes = msg.buffer;
+
+        if bytes.is_empty() {
+            return Ok(());
+        }
+        let id = bytes[0];
+        let body = bytes.slice(1..);
+        self.outbound_tx
+            .send(OutboundMsg {
+                peer: self.server,
+                packet: RaknetPacket::UserData { id, payload: body },
+                reliability: msg.reliability,
+                channel: msg.channel,
+                priority: msg.priority,
+            })
+            .await
+            .map_err(|_| crate::RaknetError::ConnectionClosed)
+    }
+}
+
+struct OfflineHandshake {
+    mtu: u16,
+    server_guid: u64,
+}
+
+struct ClientMuxerContext {
+    // Connection properties
+    server: SocketAddr,
+    mtu: usize,
+    server_guid: u64,
+    client_guid: u64,
+
+    // Communication channels
+    outbound_rx: mpsc::Receiver<OutboundMsg>,
+    to_app: mpsc::Sender<Result<Bytes, crate::RaknetError>>,
+    ready: oneshot::Sender<Result<(), crate::RaknetError>>,
+}
+
+async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
+    let mut buf = vec![0u8; context.mtu + UDP_HEADER_SIZE + 64];
+    let mut managed: Option<ManagedSession> = None;
+    let mut handshake_started = false;
+    // We move the `ready` sender into a local Option
+    let mut ready_signal = Some(context.ready);
+    let mut tick = time::interval(TICK_INTERVAL);
+    tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    tracing::debug!(
+        server = %context.server,
+        mtu = context.mtu,
+        "starting client muxer"
+    );
+
+    {
+        let now = Instant::now();
+        // Use the context fields
+        let ms = ensure_client_session(
+            &mut managed,
+            context.server,
+            context.mtu,
+            context.client_guid,
+            now,
+        );
+        ensure_client_handshake(
+            ms,
+            &mut handshake_started,
+            context.server_guid,
+            now,
+            &socket,
+            context.server,
+        )
+        .await;
+        tracing::trace!("ensure_client_handshake done");
+    }
+
+    loop {
+        // tracing::trace!("waiting for packet");
+        tokio::select! {
+            res = socket.recv_from(&mut buf) => {
+                tracing::trace!("socket recv returned");
+                let (len, peer) = match res {
+                    Ok(v) => v,
+                    Err(e) => {
+                        if e.kind() == std::io::ErrorKind::ConnectionReset {
+                            // On Windows, this can happen if a previous send failed (ICMP Port Unreachable).
+                            // It shouldn't kill the listener loop.
+                            tracing::trace!("udp connection reset (ignoring): {}", e);
+                            continue;
+                        }
+                        tracing::error!("udp socket recv error: {}", e);
+                        break;
+                    }
+                };
+                tracing::trace!(len = len, peer = %peer, "recv_from success");
+
+                // Use context field
+                if peer != context.server {
+                    tracing::trace!(peer = %peer, "ignoring packet from unknown peer");
+                    continue;
+                }
+
+                if len == 0 {
+                    continue;
+                }
+
+                // Filter out non-datagram packets (offline packets, e.g. OpenConnectionReply2)
+                // Valid datagrams must have VALID (0x80), ACK (0x40), or NACK (0x20) flags.
+                // Offline packets are typically ID < 0x20.
+                let header_byte = buf[0];
+                if header_byte < 0x80 && (header_byte & 0x60) == 0 {
+                    // Try to decode as a control packet to see if it's a connection failure
+                    let mut slice = &buf[..len];
+                    match RaknetPacket::decode(&mut slice) {
+                        Ok(pkt) => {
+                            let error = match pkt {
+                                RaknetPacket::ConnectionRequestFailed(_) => {
+                                    Some(crate::RaknetError::ConnectionRequestFailed)
+                                }
+                                RaknetPacket::AlreadyConnected(_) => {
+                                    Some(crate::RaknetError::AlreadyConnected)
+                                }
+                                RaknetPacket::IncompatibleProtocolVersion(_) => {
+                                    Some(crate::RaknetError::IncompatibleProtocolVersion)
+                                }
+                                RaknetPacket::NoFreeIncomingConnections(_) => {
+                                    Some(crate::RaknetError::ServerFull)
+                                }
+                                RaknetPacket::ConnectionBanned(_) => {
+                                    Some(crate::RaknetError::ConnectionBanned)
+                                }
+                                RaknetPacket::IpRecentlyConnected(_) => {
+                                    Some(crate::RaknetError::IpRecentlyConnected)
+                                }
+                                _ => None,
+                            };
+
+                            if let Some(e) = error {
+                                tracing::debug!(error = ?e, "received connection failure packet");
+                                if let Some(tx) = ready_signal.take() {
+                                    let _ = tx.send(Err(e));
+                                }
+                                return;
+                            } else {
+                                tracing::trace!(byte = header_byte, "ignoring non-datagram packet");
+                            }
+                        }
+                        Err(_) => {
+                            tracing::trace!(byte = header_byte, "ignoring malformed non-datagram packet");
+                        }
+                    }
+                    continue;
+                }
+
+                let mut slice = &buf[..len];
+                if let Ok(dgram) = Datagram::decode(&mut slice) {
+                    let now = Instant::now();
+                    // Use context fields
+                    let ms = ensure_client_session(
+                        &mut managed,
+                        context.server,
+                        context.mtu,
+                        context.client_guid,
+                        now,
+                    );
+                    ensure_client_handshake(
+                        ms,
+                        &mut handshake_started,
+                        context.server_guid,
+                        now,
+                        &socket,
+                        context.server
+                    ).await;
+
+                    // This logic remains the same, but was already correct
+                    match ms.handle_datagram(dgram, now) {
+                        Ok(pkts) => {
+                            tracing::trace!(connected = ms.is_connected(), "handle_datagram success");
+                            for p in pkts {
+                                if let RaknetPacket::UserData { id, payload } = p {
+                                    tracing::trace!(id = id, len = payload.len(), "received user packet");
+                                    // Reconstruct full packet: [ID] + [Payload]
+                                    let mut full = BytesMut::with_capacity(1 + payload.len());
+                                    full.put_u8(id);
+                                    full.extend_from_slice(&payload);
+                                    if context.to_app.send(Ok(full.freeze())).await.is_err() {
+                                        tracing::debug!("app channel closed");
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!(error = ?e, "failed to handle datagram");
+                        }
+                    }
+                    notify_client_ready(ms, &mut ready_signal);
+
+                    if ms.state() == ConnectionState::Closed {
+                        if let Some(reason) = ms.last_disconnect_reason() {
+                            tracing::info!(reason = ?reason, "session disconnected");
+                            let _ = context.to_app.send(Err(crate::RaknetError::Disconnected(reason))).await;
+                        } else {
+                            let _ = context.to_app.send(Err(crate::RaknetError::ConnectionClosed)).await;
+                        }
+                        return;
+                    }
+
+                    flush_built_datagrams(ms, &socket, context.server, now).await;
+                } else {
+                    tracing::debug!("failed to decode datagram");
+                }
+            }
+
+            // Use context field
+            Some(msg) = context.outbound_rx.recv() => {
+                tracing::trace!(channel=msg.channel, rel=?msg.reliability, "processing outbound message");
+                let now = Instant::now();
+                // Use context fields
+                let ms = ensure_client_session(
+                    &mut managed,
+                    context.server,
+                    context.mtu,
+                    context.client_guid,
+                    now,
+                );
+                ensure_client_handshake(
+                    ms,
+                    &mut handshake_started,
+                    context.server_guid,
+                    now,
+                    &socket,
+                    context.server
+                ).await;
+
+                let _ = ms.queue_app_packet(
+                    msg.packet,
+                    msg.reliability,
+                    msg.channel,
+                    msg.priority,
+                );
+                flush_built_datagrams(ms, &socket, context.server, now).await;
+                notify_client_ready(ms, &mut ready_signal);
+            }
+
+            _ = tick.tick() => {
+                if let Some(ms) = managed.as_mut() {
+                    let now = Instant::now();
+                    flush_built_datagrams(ms, &socket, context.server, now).await;
+                    notify_client_ready(ms, &mut ready_signal);
+                }
+            }
+
+            else => break,
+        }
+    }
+    tracing::debug!("client muxer terminated");
+}
+
+async fn perform_offline_handshake(
+    socket: &UdpSocket,
+    server: SocketAddr,
+    _mtu_hint: usize,
+    client_guid: u64,
+) -> std::io::Result<OfflineHandshake> {
+    let mut reply1 = None;
+    let mut used_mtu = 0;
+
+    tracing::debug!(server = %server, "starting offline handshake");
+
+    for &mtu in crate::protocol::constants::MTU_SIZES {
+        tracing::debug!(mtu = mtu, "probing mtu");
+        let req1 =
+            RaknetPacket::OpenConnectionRequest1(crate::protocol::packet::OpenConnectionRequest1 {
+                magic: DEFAULT_UNCONNECTED_MAGIC,
+                protocol_version: RAKNET_PROTOCOL_VERSION,
+                // -46 because of the packet size overhead (IP + UDP + RakNet headers)
+                padding: EoBPadding(mtu.saturating_sub(46).into()),
+            });
+
+        let mut buf = BytesMut::new();
+        if req1.encode(&mut buf).is_err() {
+            tracing::warn!(mtu = mtu, "failed to encode OpenConnectionRequest1");
+            continue;
+        }
+        if let Err(e) = socket.send_to(&buf, server).await {
+            tracing::warn!(mtu = mtu, error = ?e, "failed to send OpenConnectionRequest1");
+            continue;
+        }
+
+        let mut tmp = [0u8; 2048];
+        // Short timeout for each probe
+        let res = timeout(Duration::from_secs(1), socket.recv_from(&mut tmp)).await;
+
+        if let Ok(Ok((len, from))) = res {
+            if from == server {
+                let mut slice = &tmp[..len];
+                if let Ok(pkt) = RaknetPacket::decode(&mut slice)
+                    && let RaknetPacket::OpenConnectionReply1(r) = pkt
+                {
+                    tracing::debug!(
+                        mtu = mtu,
+                        server_mtu = r.mtu,
+                        "received OpenConnectionReply1"
+                    );
+                    reply1 = Some(r);
+                    used_mtu = mtu;
+                    break;
+                }
+            }
+        } else {
+            tracing::debug!(mtu = mtu, "timeout waiting for OpenConnectionReply1");
+        }
+    }
+
+    let reply1 = reply1.ok_or_else(|| {
+        tracing::error!("failed to receive any OpenConnectionReply1");
+        std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "timeout waiting for OpenConnectionReply1 after probing MTUs",
+        )
+    })?;
+
+    let server_mtu = reply1.mtu;
+    let cookie = reply1.cookie;
+
+    // Negotiate final MTU: min(client_probed, server_reported)
+    let mtu_final = used_mtu
+        .clamp(MINIMUM_MTU_SIZE, MAXIMUM_MTU_SIZE)
+        .min(server_mtu);
+
+    tracing::debug!(negotiated_mtu = mtu_final, "sending OpenConnectionRequest2");
+
+    let req2 =
+        RaknetPacket::OpenConnectionRequest2(crate::protocol::packet::OpenConnectionRequest2 {
+            magic: DEFAULT_UNCONNECTED_MAGIC,
+            cookie,
+            client_proof: cookie.is_some(),
+            server_addr: server,
+            mtu: mtu_final,
+            client_guid,
+        });
+
+    let mut buf2 = BytesMut::new();
+    req2.encode(&mut buf2).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "failed to encode request2")
+    })?;
+    socket.send_to(&buf2, server).await?;
+
+    let mut tmp = [0u8; 2048];
+    let reply2 = loop {
+        let res = timeout(Duration::from_secs(2), socket.recv_from(&mut tmp)).await;
+        let (len, from) = match res {
+            Ok(Ok(v)) => v,
+            _ => {
+                tracing::error!("timeout waiting for OpenConnectionReply2");
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "timeout waiting for OpenConnectionReply2",
+                ));
+            }
+        };
+        if from != server {
+            continue;
+        }
+        let mut slice = &tmp[..len];
+        if let Ok(pkt) = RaknetPacket::decode(&mut slice)
+            && let RaknetPacket::OpenConnectionReply2(r) = pkt
+        {
+            tracing::debug!(server_guid = r.server_guid, "handshake complete");
+            break r;
+        }
+    };
+
+    Ok(OfflineHandshake {
+        mtu: mtu_final,
+        server_guid: reply2.server_guid,
+    })
+}
+
+fn client_guid() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0xdead_beef_dead_beef)
+}
+
+fn ensure_client_session(
+    managed: &mut Option<ManagedSession>,
+    server: SocketAddr,
+    mtu: usize,
+    client_guid: u64,
+    now: Instant,
+) -> &mut ManagedSession {
+    managed.get_or_insert_with(|| {
+        let config = client_session_config(client_guid);
+        ManagedSession::with_config(server, mtu, now, config)
+    })
+}
+
+async fn ensure_client_handshake(
+    managed: &mut ManagedSession,
+    handshake_started: &mut bool,
+    server_guid: u64,
+    now: Instant,
+    socket: &UdpSocket,
+    server: SocketAddr,
+) {
+    if !*handshake_started && managed.start_client_handshake(server_guid, now).is_ok() {
+        *handshake_started = true;
+        flush_built_datagrams(managed, socket, server, now).await;
+    }
+}
+
+async fn flush_built_datagrams(
+    managed: &mut ManagedSession,
+    socket: &UdpSocket,
+    peer: SocketAddr,
+    now: Instant,
+) {
+    tracing::trace!("flushing tick packets");
+    for d in managed.on_tick(now) {
+        let mut out = BytesMut::new();
+        d.encode(&mut out)
+            .expect("Bad datagram made it into queue.");
+        tracing::trace!(size = out.len(), "sending tick datagram");
+        let _ = socket.send_to(&out, peer).await;
+    }
+
+    tracing::trace!("flushing data packets");
+    while let Some(d) = managed.build_datagram(now) {
+        let mut out = BytesMut::new();
+        d.encode(&mut out)
+            .expect("Bad datagram made it into queue.");
+        tracing::trace!(size = out.len(), "sending data datagram");
+        let _ = socket.send_to(&out, peer).await;
+    }
+}
+
+fn notify_client_ready(
+    managed: &ManagedSession,
+
+    ready: &mut Option<oneshot::Sender<Result<(), crate::RaknetError>>>,
+) {
+    tracing::trace!(
+        "notify_client_ready called, connected={}",
+        managed.is_connected()
+    );
+
+    if managed.is_connected()
+        && let Some(tx) = ready.take()
+    {
+        tracing::trace!("sending ready signal");
+
+        let _ = tx.send(Ok(()));
+    }
+}
+
+fn client_session_config(client_guid: u64) -> SessionConfig {
+    SessionConfig {
+        role: SessionRole::Client,
+        guid: client_guid,
+        ..SessionConfig::default()
+    }
+}

@@ -1,6 +1,6 @@
 use bytes::{Buf, BufMut};
 
-use crate::protocol::packet::{DecodeError, RaknetEncodable};
+use crate::protocol::packet::{DecodeError, EncodeError, RaknetEncodable};
 
 /// Unsigned variable-length integer encoding used by RakNet.
 pub struct VarUInt(pub u64);
@@ -9,7 +9,7 @@ pub struct VarUInt(pub u64);
 pub struct VarInt(pub i64);
 
 impl RaknetEncodable for VarUInt {
-    fn encode_raknet(&self, dst: &mut impl BufMut) {
+    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), EncodeError> {
         // clone it to mut it.
         let mut v = self.0;
         while v >= 0x80 {
@@ -17,6 +17,7 @@ impl RaknetEncodable for VarUInt {
             v >>= 7
         }
         dst.put_u8((v & 0x7f) as u8);
+        Ok(())
     }
 
     fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {
@@ -41,9 +42,9 @@ impl RaknetEncodable for VarUInt {
 }
 
 impl RaknetEncodable for VarInt {
-    fn encode_raknet(&self, dst: &mut impl BufMut) {
+    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), EncodeError> {
         let ux = ((self.0 << 1) ^ (self.0 >> 63)) as u64;
-        VarUInt(ux).encode_raknet(dst);
+        VarUInt(ux).encode_raknet(dst)
     }
 
     fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {
@@ -59,28 +60,28 @@ mod tests {
     use bytes::BytesMut;
 
     #[test]
-    fn varuint_roundtrip_basic_values() {
+    fn varuint_roundtrip_basic_values() -> Result<(), DecodeError> {
         for &v in &[0u64, 1, 127, 128, 255, 300, u32::MAX as u64] {
             let original = VarUInt(v);
             let mut buf = BytesMut::new();
-            original.encode_raknet(&mut buf);
+            original.encode_raknet(&mut buf).unwrap();
             let mut slice = buf.freeze();
-            let decoded = VarUInt::decode_raknet(&mut slice).unwrap();
+            let decoded = VarUInt::decode_raknet(&mut slice)?;
             assert_eq!(decoded.0, v);
         }
+        Ok(())
     }
 
     #[test]
-    fn varint_roundtrip_basic_values() {
+    fn varint_roundtrip_basic_values() -> Result<(), DecodeError> {
         for &v in &[0i64, 1, -1, 127, -127, 300, -300] {
             let original = VarInt(v);
             let mut buf = BytesMut::new();
-            original.encode_raknet(&mut buf);
+            original.encode_raknet(&mut buf).unwrap();
             let mut slice = buf.freeze();
-            let decoded = VarInt::decode_raknet(&mut slice).unwrap();
+            let decoded = VarInt::decode_raknet(&mut slice)?;
             assert_eq!(decoded.0, v);
         }
+        Ok(())
     }
 }
-
-

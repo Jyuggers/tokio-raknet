@@ -7,7 +7,10 @@ use crate::protocol::packet::{DecodeError, RaknetEncodable};
 pub struct Advertisement(pub Option<bytes::Bytes>);
 
 impl RaknetEncodable for Advertisement {
-    fn encode_raknet(&self, dst: &mut impl BufMut) {
+    fn encode_raknet(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
         if let Some(ad_bytes) = &self.0
             && !ad_bytes.is_empty()
         {
@@ -17,6 +20,7 @@ impl RaknetEncodable for Advertisement {
             dst.put_slice(&ad_bytes[..len as usize]);
         }
         // If self.0 is None or empty, NOP
+        Ok(())
     }
 
     fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError> {
@@ -50,7 +54,7 @@ mod tests {
         let payload = bytes::Bytes::from_static(b"hello");
         let adv = Advertisement(Some(payload.clone()));
         let mut buf = BytesMut::new();
-        adv.encode_raknet(&mut buf);
+        adv.encode_raknet(&mut buf).unwrap();
         let mut slice = buf.freeze();
         let decoded = Advertisement::decode_raknet(&mut slice).unwrap();
         assert!(decoded.0.is_some());
@@ -61,9 +65,7 @@ mod tests {
     fn advertisement_none_encodes_to_nothing() {
         let adv = Advertisement(None);
         let mut buf = BytesMut::new();
-        adv.encode_raknet(&mut buf);
+        adv.encode_raknet(&mut buf).unwrap();
         assert_eq!(buf.len(), 0);
     }
 }
-
-

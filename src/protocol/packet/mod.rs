@@ -1,14 +1,14 @@
 pub mod connected;
-pub mod open_connection;
-pub mod unconnected;
 mod error;
+pub mod open_connection;
 mod registry;
+pub mod unconnected;
 
 pub use connected::*;
+pub use error::{DecodeError, EncodeError};
 pub use open_connection::*;
-pub use unconnected::*;
-pub use error::DecodeError;
 pub use registry::RaknetPacket;
+pub use unconnected::*;
 
 use bytes::{Buf, BufMut};
 
@@ -21,7 +21,7 @@ pub trait Packet: Sized {
     const ID: u8;
 
     /// Encode the body of this packet into the destination buffer.
-    fn encode_body(&self, dst: &mut impl BufMut);
+    fn encode_body(&self, dst: &mut impl BufMut) -> Result<(), EncodeError>;
 
     /// Decode the body of this packet from the source buffer.
     fn decode_body(src: &mut impl Buf) -> Result<Self, DecodeError>;
@@ -31,7 +31,7 @@ pub trait Packet: Sized {
 /// the RakNet wire format.
 pub trait RaknetEncodable: Sized {
     /// Encode this value into the destination buffer.
-    fn encode_raknet(&self, dst: &mut impl BufMut);
+    fn encode_raknet(&self, dst: &mut impl BufMut) -> Result<(), EncodeError>;
 
     /// Decode a value of this type from the source buffer.
     fn decode_raknet(src: &mut impl Buf) -> Result<Self, DecodeError>;
