@@ -9,7 +9,7 @@ use bytes::Bytes;
 
 use crate::protocol::ack::{AckNackPayload, SequenceRange};
 
-use super::Session;
+use super::{IncomingPacket, Session};
 
 impl Session {
     /// Handle an incoming data payload (a list of encapsulated packets).
@@ -17,7 +17,7 @@ impl Session {
         &mut self,
         packets: Vec<EncapsulatedPacket>,
         now: Instant,
-    ) -> Result<Vec<RaknetPacket>, DecodeError> {
+    ) -> Result<Vec<IncomingPacket>, DecodeError> {
         let mut out = Vec::new();
 
         self.sliding.on_packet_received(now);
@@ -43,30 +43,52 @@ impl Session {
         &mut self,
         enc: EncapsulatedPacket,
         now: Instant,
-        out: &mut Vec<RaknetPacket>,
+        out: &mut Vec<IncomingPacket>,
     ) -> Result<(), DecodeError> {
-        let assembled_opt = self.split_assembler.add(enc, now)?;
-        let enc = match assembled_opt {
-            Some(pkt) => pkt,
-            None => return Ok(()),
+        // Reliability Logic:
+        // 1. Check if we've already seen this reliable index (Deduplication).
+        //    If we have, we drop it immediately to avoid expensive split processing.
+        // 2. Try to process the packet (Split Assembly or direct).
+        // 3. If successful (or buffered), MARK the reliable index as seen.
+        //    If processing failed (e.g., SplitBufferFull), we DO NOT mark it, allowing retransmission.
+
+        let ridx = if enc.header.reliability.is_reliable() {
+            enc.reliable_index
+        } else {
+            None
         };
 
-        let rel = enc.header.reliability;
-
-        if rel.is_reliable() {
-            let ridx = match enc.reliable_index {
-                Some(idx) => idx,
-                None => {
-                    return Ok(());
-                }
-            };
-
-            if !self.process_reliable_index(ridx) {
-                return Ok(());
-            }
+        if let Some(idx) = ridx
+            && self.reliable_tracker.has_seen(idx)
+        {
+            // Duplicate. Drop silently.
+            return Ok(());
         }
 
-        if rel.is_ordered() {
+        // Attempt to add to split assembler (or pass through if not split)
+        // Note: add() consumes the packet.
+        let assembled_opt = match self.split_assembler.add(enc, now) {
+            Ok(v) => v,
+            Err(e) => {
+                // If buffer is full, we return Error.
+                // We have NOT marked the reliable index as seen.
+                // Sender will timeout and retransmit. Ideally buffer clears by then.
+                return Err(e);
+            }
+        };
+
+        // If we reached here, the packet was either buffered or reassembled successfully.
+        // Commit the reliable index.
+        if let Some(idx) = ridx {
+            self.reliable_tracker.see(idx);
+        }
+
+        let enc = match assembled_opt {
+            Some(pkt) => pkt,
+            None => return Ok(()), // Buffered partial split
+        };
+
+        if enc.header.reliability.is_ordered() {
             self.handle_ordered(enc, out)?;
         } else {
             self.decode_and_push(enc, out)?;
@@ -78,9 +100,11 @@ impl Session {
     pub(crate) fn decode_and_push(
         &mut self,
         enc: EncapsulatedPacket,
-        out: &mut Vec<RaknetPacket>,
+        out: &mut Vec<IncomingPacket>,
     ) -> Result<(), DecodeError> {
         let mut buf = enc.payload.clone();
+        let reliability = enc.header.reliability;
+        let ordering_channel = enc.ordering_channel;
 
         let pkt = match RaknetPacket::decode(&mut buf) {
             Ok(pkt) => pkt,
@@ -104,7 +128,11 @@ impl Session {
             return Ok(());
         }
 
-        out.push(pkt);
+        out.push(IncomingPacket {
+            packet: pkt,
+            reliability,
+            ordering_channel,
+        });
         Ok(())
     }
 

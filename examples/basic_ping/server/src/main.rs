@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use std::{error::Error, net::SocketAddr};
-use tokio_raknet::transport::{RaknetConnection, RaknetListener};
+use tokio_raknet::transport::{RaknetListener, RaknetStream};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -12,34 +12,44 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut listener = RaknetListener::bind(bind_addr, 1400).await?;
 
     while let Some(mut conn) = listener.accept().await {
-        println!("[server] accept(): new connection from {}", conn.peer);
+        println!(
+            "[server] accept(): new connection from {}",
+            conn.peer_addr()
+        );
         handle_connection(&mut conn).await?;
     }
 
     Ok(())
 }
 
-async fn handle_connection(conn: &mut RaknetConnection) -> Result<(), Box<dyn Error>> {
-    println!("[server] handle_connection start peer={}", conn.peer);
+async fn handle_connection(conn: &mut RaknetStream) -> Result<(), Box<dyn Error>> {
+    println!("[server] handle_connection start peer={}", conn.peer_addr());
     while let Some(result) = conn.recv().await {
         let pkt = match result {
             Ok(p) => p,
             Err(e) => {
-                println!("[server] connection error from {}: {:?}", conn.peer, e);
+                println!(
+                    "[server] connection error from {}: {:?}",
+                    conn.peer_addr(),
+                    e
+                );
                 break;
             }
         };
-        println!("[server] recv(): got app packet from {}", conn.peer);
+        println!("[server] recv(): got app packet from {}", conn.peer_addr());
         if let Some(text) = read_user_payload(&pkt) {
-            println!("[server] received from {}: {text}", conn.peer);
+            println!("[server] received from {}: {text}", conn.peer_addr());
             let reply = make_user_payload("hello world");
             conn.send(reply).await?;
-            println!("[server] send(): replied with hello world to {}", conn.peer);
+            println!(
+                "[server] send(): replied with hello world to {}",
+                conn.peer_addr()
+            );
             break;
         }
     }
 
-    println!("[server] handle_connection end peer={}", conn.peer);
+    println!("[server] handle_connection end peer={}", conn.peer_addr());
 
     Ok(())
 }

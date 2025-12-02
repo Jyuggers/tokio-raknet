@@ -53,7 +53,11 @@ impl Session {
         }
 
         let mut packets = Vec::new();
-        let mut current_size = constants::RAKNET_DATAGRAM_HEADER_SIZE;
+        // Account for IP + UDP headers so the full on-wire packet stays within the
+        // negotiated MTU and avoids downstream fragmentation.
+        let mut current_size = constants::IPV4_HEADER_SIZE
+            + constants::UDP_HEADER_SIZE
+            + constants::RAKNET_DATAGRAM_HEADER_SIZE;
 
         self.fill_datagram(&mut packets, &mut current_size, &mut transmission_bw);
 
@@ -65,12 +69,20 @@ impl Session {
         self.datagram_write_index = self.datagram_write_index.next();
 
         let has_reliable = packets.iter().any(|p| p.header.reliability.is_reliable());
+        let has_split = packets.iter().any(|p| p.header.is_split);
 
+        let flags = if !self.outgoing_heap.is_empty() || has_split {
+            // Burst/split transfer: signal continuous send.
+            crate::protocol::constants::DatagramFlags::VALID
+                | crate::protocol::constants::DatagramFlags::CONTINUOUS_SEND
+        } else {
+            // Default: VALID with Needs B&AS bit (Cloudburst/Bedrock use 0x84 here).
+            crate::protocol::constants::DatagramFlags::VALID
+                | crate::protocol::constants::DatagramFlags::HAS_B_AND_AS
+        };
         let dgram = Datagram {
             header: crate::protocol::types::DatagramHeader {
-                // Match Cloudburst/go-raknet: mark DATA datagrams as valid + needs B&AS.
-                flags: crate::protocol::constants::DatagramFlags::VALID
-                    | crate::protocol::constants::DatagramFlags::HAS_B_AND_AS,
+                flags,
                 sequence: seq,
             },
             payload: DatagramPayload::EncapsulatedPackets(packets),
@@ -107,7 +119,10 @@ impl Session {
     }
 
     pub(crate) fn build_ack_datagram(&mut self, _now: Instant) -> Option<Datagram> {
-        let mut ranges = self.outgoing_acks.pop_for_mtu(self.mtu, 2 + 1);
+        let mut ranges = self.outgoing_acks.pop_for_mtu(
+            self.mtu,
+            constants::IPV4_HEADER_SIZE + constants::UDP_HEADER_SIZE + 2 + 1,
+        );
         if ranges.is_empty() {
             return None;
         }
@@ -131,7 +146,10 @@ impl Session {
     }
 
     pub(crate) fn build_nak_datagram(&mut self) -> Option<Datagram> {
-        let mut ranges = self.outgoing_naks.pop_for_mtu(self.mtu, 2 + 1);
+        let mut ranges = self.outgoing_naks.pop_for_mtu(
+            self.mtu,
+            constants::IPV4_HEADER_SIZE + constants::UDP_HEADER_SIZE + 2 + 1,
+        );
         if ranges.is_empty() {
             return None;
         }
@@ -156,6 +174,8 @@ impl Session {
     fn max_encapsulated_payload_len(&self) -> usize {
         self.mtu
             - constants::MAXIMUM_ENCAPSULATED_HEADER_SIZE
+            - constants::IPV4_HEADER_SIZE
+            - constants::UDP_HEADER_SIZE
             - constants::RAKNET_DATAGRAM_HEADER_SIZE
     }
 

@@ -44,6 +44,29 @@ impl ReliableTracker {
         true
     }
 
+    /// Checks if a reliable index has already been seen/processed without updating the state.
+    /// Returns true if it has been seen (duplicate).
+    pub fn has_seen(&self, ridx: Sequence24) -> bool {
+        if ridx == self.base {
+            return false; // Expecting base, so we haven't seen it.
+        }
+
+        let dist = self.base.distance_to(ridx);
+        if dist == 0 {
+            return true; // Behind base, so seen.
+        }
+        if dist as usize > self.max_window {
+            return false; // Too far ahead, treat as not seen (or invalid, but not duplicate).
+        }
+
+        let offset = dist as usize - 1;
+        if offset < self.window.len() {
+            return self.window[offset];
+        }
+        
+        false
+    }
+
     fn advance_base(&mut self) {
         while let Some(true) = self.window.front().copied() {
             self.window.pop_front();

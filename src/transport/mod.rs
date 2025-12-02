@@ -2,7 +2,7 @@
 //!
 //! This module exposes high-level server and client types:
 //! - `RaknetListener` / `RaknetConnection` for server-side use.
-//! - `RaknetClient` for client-side connections.
+//! - `RaknetStream` for client and server connections.
 //!
 //! All low-level RakNet details (fragmentation, reliability, ordering,
 //! ACK/NACK handling) are delegated to the `session` module.
@@ -15,14 +15,13 @@ use std::net::SocketAddr;
 
 use crate::protocol::{packet::RaknetPacket, reliability::Reliability, state::RakPriority};
 
-pub mod client;
 pub mod listener;
 mod listener_conn;
 pub mod mux;
+pub mod stream;
 
-pub use client::RaknetClient;
 pub use listener::RaknetListener;
-pub use listener_conn::RaknetConnection;
+pub use stream::RaknetStream;
 
 /// High-level message object for sending data.
 /// Wraps the payload and delivery options (reliability, channel, priority).
@@ -62,7 +61,12 @@ impl Message {
 
 impl From<Bytes> for Message {
     fn from(buffer: Bytes) -> Self {
-        Self::new(buffer)
+        Self {
+            buffer,
+            reliability: Reliability::UnreliableSequenced,
+            channel: 0,
+            priority: RakPriority::Normal,
+        }
     }
 }
 
@@ -88,6 +92,15 @@ impl From<String> for Message {
     fn from(s: String) -> Self {
         Self::new(Bytes::from(s))
     }
+}
+
+/// Inbound message surfaced to applications.
+/// Carries the full user payload (ID + body) and metadata from the transport.
+#[derive(Debug, Clone)]
+pub struct ReceivedMessage {
+    pub buffer: Bytes,
+    pub reliability: Reliability,
+    pub channel: u8,
 }
 
 /// Message sent from a connection handle to the transport muxer,

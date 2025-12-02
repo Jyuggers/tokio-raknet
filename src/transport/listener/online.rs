@@ -9,12 +9,15 @@ use crate::protocol::{datagram::Datagram, packet::RaknetPacket};
 use crate::session::manager::{ConnectionState, ManagedSession};
 use crate::transport::listener_conn::SessionState;
 use crate::transport::mux::flush_managed;
-use bytes::{BufMut, Bytes};
+use bytes::BufMut;
 
 use super::offline::{
     PendingConnection, handle_offline, is_offline_packet_id, server_session_config,
 };
 
+use std::sync::{Arc, RwLock};
+
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn dispatch_datagram(
     socket: &UdpSocket,
     mtu: usize,
@@ -24,14 +27,41 @@ pub(super) async fn dispatch_datagram(
     pending: &mut HashMap<SocketAddr, PendingConnection>,
     new_conn_tx: &mpsc::Sender<(
         SocketAddr,
-        mpsc::Receiver<Result<Bytes, crate::RaknetError>>,
+        mpsc::Receiver<Result<crate::transport::ReceivedMessage, crate::RaknetError>>,
     )>,
+    advertisement: &Arc<RwLock<Vec<u8>>>,
 ) {
     if sessions.contains_key(&peer) {
         if !handle_incoming_udp(socket, mtu, bytes, peer, sessions, pending, new_conn_tx).await {
-            // If decoding failed, drop the session to let the peer retry the handshake cleanly.
-            sessions.remove(&peer);
-            handle_offline(socket, mtu, bytes, peer, sessions, pending, new_conn_tx).await;
+            // If decoding failed, check if it is an offline packet (e.g. handshake retry).
+            // If so, don't kill the session; let handle_offline deal with it.
+            if is_offline_packet_id(bytes[0]) {
+                handle_offline(
+                    socket,
+                    mtu,
+                    bytes,
+                    peer,
+                    sessions,
+                    pending,
+                    new_conn_tx,
+                    advertisement,
+                )
+                .await;
+            } else {
+                // Garbage or unexpected packet; drop session.
+                sessions.remove(&peer);
+                handle_offline(
+                    socket,
+                    mtu,
+                    bytes,
+                    peer,
+                    sessions,
+                    pending,
+                    new_conn_tx,
+                    advertisement,
+                )
+                .await;
+            }
         }
         return;
     }
@@ -41,7 +71,17 @@ pub(super) async fn dispatch_datagram(
     }
 
     if is_offline_packet_id(bytes[0]) {
-        handle_offline(socket, mtu, bytes, peer, sessions, pending, new_conn_tx).await;
+        handle_offline(
+            socket,
+            mtu,
+            bytes,
+            peer,
+            sessions,
+            pending,
+            new_conn_tx,
+            advertisement,
+        )
+        .await;
     } else {
         // Unexpected packet from unknown peer; ignore.
     }
@@ -74,7 +114,7 @@ pub(super) async fn handle_outgoing_msg(
         connected = state.managed.is_connected(),
         "outbound queued"
     );
-    flush_managed(&mut state.managed, socket, msg.peer, now).await;
+    flush_managed(&mut state.managed, socket, msg.peer, now, false).await;
 }
 
 pub(super) async fn tick_sessions(
@@ -85,7 +125,7 @@ pub(super) async fn tick_sessions(
     let mut dead = Vec::new();
 
     for (&peer, state) in sessions.iter_mut() {
-        flush_managed(&mut state.managed, socket, peer, now).await;
+        flush_managed(&mut state.managed, socket, peer, now, true).await;
         if matches!(state.managed.state(), ConnectionState::Closed) {
             // Inform app of disconnection if it was connected/announced
             if state.announced {
@@ -119,7 +159,7 @@ async fn handle_incoming_udp(
     _pending: &mut HashMap<SocketAddr, PendingConnection>,
     new_conn_tx: &mpsc::Sender<(
         SocketAddr,
-        mpsc::Receiver<Result<Bytes, crate::RaknetError>>,
+        mpsc::Receiver<Result<crate::transport::ReceivedMessage, crate::RaknetError>>,
     )>,
 ) -> bool {
     let mut slice = bytes;
@@ -153,16 +193,25 @@ async fn handle_incoming_udp(
                 "handle_datagram"
             );
             for pkt in &pkts {
-                tracing::trace!(peer = %peer, id = format_args!("0x{:02x}", pkt.id()), "pkt");
+                tracing::trace!(
+                    peer = %peer,
+                    id = format_args!("0x{:02x}", pkt.packet.id()),
+                    "pkt"
+                );
             }
         }
         for pkt in ManagedSession::filter_app_packets(pkts) {
-            if let RaknetPacket::UserData { id, payload } = pkt {
+            if let RaknetPacket::UserData { id, payload } = pkt.packet {
                 // Reassemble original app bytes as go-raknet does: id byte + payload bytes.
                 let mut buf = bytes::BytesMut::with_capacity(1 + payload.len());
                 buf.put_u8(id);
                 buf.extend_from_slice(&payload);
-                let _ = state.to_app.send(Ok(buf.freeze())).await;
+                let msg = crate::transport::ReceivedMessage {
+                    buffer: buf.freeze(),
+                    reliability: pkt.reliability,
+                    channel: pkt.ordering_channel.unwrap_or(0),
+                };
+                let _ = state.to_app.send(Ok(msg)).await;
             }
         }
         false
@@ -171,7 +220,7 @@ async fn handle_incoming_udp(
     };
 
     maybe_announce_connection(peer, state, new_conn_tx).await;
-    flush_managed(&mut state.managed, socket, peer, now).await;
+    flush_managed(&mut state.managed, socket, peer, now, false).await;
 
     if closed_after || matches!(state.managed.state(), ConnectionState::Closed) {
         if state.announced {
@@ -197,7 +246,7 @@ pub(super) async fn maybe_announce_connection(
     state: &mut SessionState,
     new_conn_tx: &mpsc::Sender<(
         SocketAddr,
-        mpsc::Receiver<Result<Bytes, crate::RaknetError>>,
+        mpsc::Receiver<Result<crate::transport::ReceivedMessage, crate::RaknetError>>,
     )>,
 ) {
     if state.announced || !state.managed.is_connected() {

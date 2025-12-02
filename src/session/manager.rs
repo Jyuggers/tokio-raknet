@@ -69,7 +69,7 @@ impl Default for SessionConfig {
             guid: 0,
             session_stale: SESSION_STALE,
             session_timeout: SESSION_TIMEOUT,
-            ping_interval: Duration::from_secs(5),
+            ping_interval: Duration::from_millis(500),
             max_queued_reliable_bytes: None,
             session: SessionTunables::default(),
         }
@@ -118,6 +118,10 @@ impl ManagedSession {
 
     pub fn peer(&self) -> SocketAddr {
         self.peer
+    }
+
+    pub fn mtu(&self) -> usize {
+        self.inner.mtu()
     }
 
     pub fn state(&self) -> ConnectionState {
@@ -194,7 +198,7 @@ impl ManagedSession {
         &mut self,
         dgram: Datagram,
         now: Instant,
-    ) -> Result<Vec<RaknetPacket>, SessionError> {
+    ) -> Result<Vec<crate::session::IncomingPacket>, SessionError> {
         if self.state == ConnectionState::Closed {
             return Ok(Vec::new());
         }
@@ -211,7 +215,7 @@ impl ManagedSession {
 
                 let pkts = self.inner.handle_data_payload(packets, now)?;
                 for pkt in &pkts {
-                    self.handle_control_packet(pkt, now);
+                    self.handle_control_packet(&pkt.packet, now);
                 }
                 Ok(pkts)
             }
@@ -241,8 +245,12 @@ impl ManagedSession {
     /// Filter a batch of decoded packets down to game-level packets that
     /// should be delivered to the application. Currently this keeps only
     /// user-data packets (IDs >= 0x80).
-    pub fn filter_app_packets(pkts: Vec<RaknetPacket>) -> Vec<RaknetPacket> {
-        pkts.into_iter().filter(is_app_packet).collect()
+    pub fn filter_app_packets(
+        pkts: Vec<crate::session::IncomingPacket>,
+    ) -> Vec<crate::session::IncomingPacket> {
+        pkts.into_iter()
+            .filter(|p| is_app_packet(&p.packet))
+            .collect()
     }
 }
 
@@ -305,7 +313,7 @@ mod tests {
         };
         let mut ms = ManagedSession::with_config(peer, 1200, now, config);
 
-        ms.start_client_handshake(0x02, now).unwrap();
+        ms.start_client_handshake(0x02, now, false).unwrap();
 
         let dgram = ms
             .build_datagram(now)
@@ -328,7 +336,7 @@ mod tests {
         let mut ms = ManagedSession::with_config(peer, 1200, now, config);
 
         let request = RaknetPacket::ConnectionRequest(ConnectionRequest {
-            server_guid: 0xaa,
+            client_guid: 0xaa,
             timestamp: RaknetTime(42),
             secure: false,
         });

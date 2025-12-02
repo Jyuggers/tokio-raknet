@@ -52,6 +52,28 @@ impl OrderingChannels {
         Some(idx)
     }
 
+    /// Force advance the read index if it matches the given index.
+    /// Used when an ordered packet is dropped (e.g. split timeout).
+    /// Also flushes any queued packets that become ready after skipping.
+    pub fn skip_index(&mut self, channel: u8, index: Sequence24) {
+        let ch = channel as usize;
+        if ch >= self.order_read.len() {
+            return;
+        }
+        if self.order_read[ch] == index {
+            self.order_read[ch] = self.order_read[ch].next();
+            // Flush any queued packets that are now ready after skipping
+            while let Some(top) = self.heaps[ch].peek() {
+                if top.0.index == self.order_read[ch] {
+                    self.heaps[ch].pop();
+                    self.order_read[ch] = self.order_read[ch].next();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
     /// Handle an ordered packet; returns a list of packets ready for decode in-order.
     pub fn handle_ordered(&mut self, enc: EncapsulatedPacket) -> Option<Vec<EncapsulatedPacket>> {
         let ch = enc.ordering_channel? as usize;

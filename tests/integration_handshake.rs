@@ -1,6 +1,6 @@
 use std::time::Duration;
 use tokio::time::timeout;
-use tokio_raknet::{RaknetClient, RaknetListener};
+use tokio_raknet::{RaknetListener, RaknetStream};
 
 #[tokio::test]
 async fn test_basic_handshake_and_exchange() {
@@ -39,7 +39,7 @@ async fn test_basic_handshake_and_exchange() {
         // Give server a moment to bind (though not strictly needed with await)
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let mut client = RaknetClient::connect(local_addr, 1400)
+        let mut client = RaknetStream::connect(local_addr, 1400)
             .await
             .expect("failed to connect to server");
 

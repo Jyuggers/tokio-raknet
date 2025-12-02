@@ -84,7 +84,16 @@ impl SplitAssembler {
             return Err(DecodeError::SplitIndexOutOfRange);
         }
         if entry.parts[idx].is_some() {
-            return Err(DecodeError::DuplicateSplitPart);
+            // Duplicate part, just ignore it.
+            // Returning an error here causes connection drops/lag in some implementations
+            // if the sender aggressively retransmits parts.
+            tracing::warn!(
+                "Duplicate split part received. ID: {}, Index: {}, Count: {}",
+                split.id,
+                split.index,
+                split.count
+            );
+            return Ok(None);
         }
 
         entry.parts[idx] = Some(pkt.payload.clone());
@@ -102,6 +111,8 @@ impl SplitAssembler {
         }
         let payload = buf.freeze();
         let bit_length = (payload.len() as u16) << 3;
+        
+        tracing::trace!("Reassembled split packet ID: {}, Size: {}", split.id, payload.len());
 
         let header = crate::protocol::types::EncapsulatedPacketHeader::new(
             entry.reliability,
@@ -124,9 +135,18 @@ impl SplitAssembler {
         Ok(Some(assembled))
     }
 
-    pub fn prune(&mut self, now: Instant) {
-        self.entries
-            .retain(|_, entry| now.duration_since(entry.created) < self.ttl);
+    pub fn prune(&mut self, now: Instant) -> Vec<(Option<u8>, Option<Sequence24>)> {
+        let mut dropped = Vec::new();
+        self.entries.retain(|id, entry| {
+            if now.duration_since(entry.created) >= self.ttl {
+                tracing::warn!("Dropping expired split packet ID: {}, Age: {:?}", id, now.duration_since(entry.created));
+                dropped.push((entry.ordering_channel, entry.ordering_index));
+                false
+            } else {
+                true
+            }
+        });
+        dropped
     }
 }
 

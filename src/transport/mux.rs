@@ -6,7 +6,7 @@ use tokio::time::{self, Interval, MissedTickBehavior};
 
 use crate::session::manager::ManagedSession;
 
-const TICK_INTERVAL_MS: u64 = 50;
+const TICK_INTERVAL_MS: u64 = 20;
 
 pub fn new_tick_interval() -> Interval {
     let mut tick = time::interval(Duration::from_millis(TICK_INTERVAL_MS));
@@ -20,12 +20,15 @@ pub async fn flush_managed(
     socket: &UdpSocket,
     peer: std::net::SocketAddr,
     now: Instant,
+    run_tick: bool,
 ) {
-    for d in managed.on_tick(now) {
-        trace_send(peer, &d);
-        let mut out = BytesMut::new();
-        d.encode(&mut out).expect("Bad datagram in queue.");
-        let _ = socket.send_to(&out, peer).await;
+    if run_tick {
+        for d in managed.on_tick(now) {
+            trace_send(peer, &d);
+            let mut out = BytesMut::new();
+            d.encode(&mut out).expect("Bad datagram in queue.");
+            let _ = socket.send_to(&out, peer).await;
+        }
     }
 
     while let Some(d) = managed.build_datagram(now) {

@@ -1,9 +1,18 @@
 use bytes::{Buf, BufMut};
-use std::time::Duration;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
 use crate::protocol::packet::{DecodeError, RaknetEncodable};
 
+pub static START_TIME: OnceLock<Instant> = OnceLock::new();
+
+pub fn raknet_start_time() -> Instant {
+    *START_TIME.get_or_init(Instant::now)
+}
+
 /// Milliseconds of a duration as used on the RakNet wire format.
+///
+/// This represents the elapsed time since [`raknet_start_time`].
 #[derive(Debug, Clone, Copy)]
 pub struct RaknetTime(pub u64); // ms on wire
 

@@ -244,7 +244,7 @@ impl Packet for AlreadyConnected {
 /// Online connection request used once offline negotiation has succeeded.
 #[derive(Debug, Clone)]
 pub struct ConnectionRequest {
-    pub server_guid: u64,
+    pub client_guid: u64,
     pub timestamp: RaknetTime,
     pub secure: bool,
 }
@@ -256,7 +256,7 @@ impl Packet for ConnectionRequest {
         &self,
         dst: &mut impl BufMut,
     ) -> Result<(), crate::protocol::packet::EncodeError> {
-        self.server_guid.encode_raknet(dst)?;
+        self.client_guid.encode_raknet(dst)?;
         self.timestamp.encode_raknet(dst)?;
         self.secure.encode_raknet(dst)?;
         Ok(())
@@ -264,7 +264,7 @@ impl Packet for ConnectionRequest {
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
         Ok(Self {
-            server_guid: u64::decode_raknet(src)?,
+            client_guid: u64::decode_raknet(src)?,
             timestamp: RaknetTime::decode_raknet(src)?,
             secure: bool::decode_raknet(src)?,
         })
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn connection_request_roundtrip() {
         let pkt = ConnectionRequest {
-            server_guid: 123,
+            client_guid: 123,
             timestamp: RaknetTime(456),
             secure: true,
         };
@@ -411,7 +411,7 @@ mod tests {
         pkt.encode_body(&mut buf).unwrap();
         let mut slice = buf.freeze();
         let decoded = ConnectionRequest::decode_body(&mut slice).unwrap();
-        assert_eq!(decoded.server_guid, pkt.server_guid);
+        assert_eq!(decoded.client_guid, pkt.client_guid);
         assert_eq!(decoded.timestamp.0, pkt.timestamp.0);
         assert_eq!(decoded.secure, pkt.secure);
     }

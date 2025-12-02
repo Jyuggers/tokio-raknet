@@ -22,8 +22,8 @@ pub const RAKNET_PROTOCOL_VERSION: u8 = 11;
 pub const MINIMUM_MTU_SIZE: u16 = 576;
 /// Maximum supported MTU as used during negotiation.
 pub const MAXIMUM_MTU_SIZE: u16 = 1400;
-/// Candidate MTU sizes to probe, from largest to smallest.
-pub const MTU_SIZES: &[u16] = &[MAXIMUM_MTU_SIZE, 1200, MINIMUM_MTU_SIZE];
+/// Candidate MTU sizes to probe, from most used by client.
+pub const MTU_SIZES: &[u16] = &[1200, MAXIMUM_MTU_SIZE, MINIMUM_MTU_SIZE];
 
 const _: () = {
     assert!(
@@ -42,6 +42,10 @@ pub const MAX_ACK_SEQUENCES: u16 = 8192;
 
 /// Size of a UDP header on the wire.
 pub const UDP_HEADER_SIZE: usize = 8;
+/// Size of an IPv4 header without options. We pessimistically subtract this
+/// when packing datagrams so the full IP packet stays within the negotiated MTU
+/// even if the MTU was measured at the link layer.
+pub const IPV4_HEADER_SIZE: usize = 20;
 
 pub const RAKNET_DATAGRAM_HEADER_SIZE: usize = 4;
 
@@ -75,6 +79,11 @@ bitflags! {
         const VALID          = 0b1000_0000;
         const ACK            = 0b0100_0000;
         const NACK           = 0b0010_0000;
+        /// Datagram is part of a packet pair (used for bandwidth probing).
+        const PACKET_PAIR    = 0b0001_0000;
+        /// Sender is going to transmit additional datagrams immediately after this one.
+        const CONTINUOUS_SEND = 0b0000_1000;
+        /// Datagram requests/needs B&AS (bandwidth and smoothness) info.
         const HAS_B_AND_AS   = 0b0000_0100;
     }
 }

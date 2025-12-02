@@ -1,6 +1,6 @@
 //! Unconnected (offline) RakNet discovery and ping packets.
 
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{Buf, BufMut};
 
 use crate::protocol::{
     packet::{Packet, RaknetEncodable},
@@ -68,10 +68,45 @@ impl Packet for UnconnectedPong {
     }
 }
 
-/// Legacy packet used for querying open connections; currently unimplemented.
+/// Advertise system packet (legacy/alternative to UnconnectedPong).
+#[derive(Debug, Clone)]
+pub struct AdvertiseSystem {
+    pub ping_time: RaknetTime,
+    pub server_guid: u64,
+    pub magic: Magic,
+    pub advertisement: Advertisement,
+}
+
+impl Packet for AdvertiseSystem {
+    const ID: u8 = 0x1d;
+
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.ping_time.encode_raknet(dst)?;
+        self.server_guid.encode_raknet(dst)?;
+        self.magic.encode_raknet(dst)?;
+        self.advertisement.encode_raknet(dst)?;
+        Ok(())
+    }
+
+    fn decode_body(src: &mut impl Buf) -> Result<Self, super::DecodeError> {
+        Ok(Self {
+            ping_time: RaknetTime::decode_raknet(src)?,
+            server_guid: u64::decode_raknet(src)?,
+            magic: Magic::decode_raknet(src)?,
+            advertisement: Advertisement::decode_raknet(src)?,
+        })
+    }
+}
+
+/// Unconnected ping for open connections.
+/// Same structure as UnconnectedPing but different ID.
 #[derive(Debug, Clone)]
 pub struct UnconnectedPingOpenConnections {
-    pub payload: Bytes,
+    pub ping_time: RaknetTime,
+    pub magic: Magic,
 }
 
 impl Packet for UnconnectedPingOpenConnections {
@@ -81,17 +116,15 @@ impl Packet for UnconnectedPingOpenConnections {
         &self,
         dst: &mut impl BufMut,
     ) -> Result<(), crate::protocol::packet::EncodeError> {
-        dst.put_slice(&self.payload);
+        self.ping_time.encode_raknet(dst)?;
+        self.magic.encode_raknet(dst)?;
         Ok(())
     }
 
     fn decode_body(src: &mut impl Buf) -> Result<Self, super::DecodeError> {
-        let remaining = src.remaining();
-        let payload = src.copy_to_bytes(remaining);
-
-        Err(super::DecodeError::UnimplementedPacket {
-            id: Self::ID,
-            payload,
+        Ok(Self {
+            ping_time: RaknetTime::decode_raknet(src)?,
+            magic: Magic::decode_raknet(src)?,
         })
     }
 }

@@ -20,7 +20,7 @@ pub use encapsulated_packet_header::EncapsulatedPacketHeader;
 pub use ints::{U16LE, U24LE};
 pub use padding::EoBPadding;
 pub use sequence::Sequence24;
-pub use time::RaknetTime;
+pub use time::{RaknetTime, raknet_start_time};
 pub use varint::{VarInt, VarUInt};
 
 /// Magic used to identify RakNet packets.

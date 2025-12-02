@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = [".", "examples/*/client", "examples/*/server", "examples/minecraft_start"]
+members = [".", "examples/*/client", "examples/*/server", "examples/minecraft_start", "examples/forwarder"]
 
 [package]
 name = "tokio-raknet"
