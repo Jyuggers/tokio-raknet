@@ -25,22 +25,28 @@ use std::{
     time::{Duration, Instant},
 };
 
-use bytes::BytesMut;
-
 use crate::protocol::{
     constants::{self, MAX_ACK_SEQUENCES},
     datagram::Datagram,
     encapsulated_packet::EncapsulatedPacket,
-    packet::{DecodeError, RaknetEncodable, RaknetPacket},
+    packet::{DecodeError, RaknetPacket},
+    reliability::Reliability,
     types::Sequence24,
 };
 
-use crate::protocol::ack::{AckNackPayload, SequenceRange};
+use crate::protocol::ack::SequenceRange;
 use ack_queue::AckQueue;
 use ordering_channels::OrderingChannels;
 use reliable_tracker::ReliableTracker;
 use sliding_window::SlidingWindow;
 use split_assembler::SplitAssembler;
+
+/// Packet decoded out of a session along with delivery metadata.
+pub struct IncomingPacket {
+    pub packet: RaknetPacket,
+    pub reliability: Reliability,
+    pub ordering_channel: Option<u8>,
+}
 
 /// Tunable low-level session parameters to mirror Cloudburst configurability.
 #[derive(Debug, Clone)]
@@ -58,10 +64,11 @@ impl Default for SessionTunables {
         Self {
             max_ordering_channels: constants::MAXIMUM_ORDERING_CHANNELS as usize,
             ack_queue_capacity: 1024,
+            // Reduced split timeout to clear dead buffers faster
             split_timeout: Duration::from_secs(30),
             reliable_window: constants::MAX_ACK_SEQUENCES as u32,
-            max_split_parts: 128,
-            max_concurrent_splits: 256,
+            max_split_parts: 8192,
+            max_concurrent_splits: 4096,
         }
     }
 }
@@ -159,7 +166,12 @@ impl Session {
         s
     }
 
+    pub fn mtu(&self) -> usize {
+        self.mtu
+    }
+
     /// Process datagram sequence for ACK/NACK generation (Cloudburst-style).
+    #[tracing::instrument(skip_all, level = "trace")]
     pub fn process_datagram_sequence(&mut self, seq: Sequence24) {
         let prev = self.datagram_read_index;
 
@@ -168,7 +180,7 @@ impl Session {
                 start: seq,
                 end: seq,
             };
-            Self::trace_range_event("ack_out_of_order", &range);
+            tracing::trace!(event = "ack_out_of_order");
             self.outgoing_acks.push(range);
             return;
         }
@@ -180,7 +192,7 @@ impl Session {
                 start: seq,
                 end: seq,
             };
-            Self::trace_range_event("ack_in_order", &range);
+            tracing::trace!(event = "ack_in_order");
             self.outgoing_acks.push(range);
             return;
         }
@@ -188,7 +200,10 @@ impl Session {
         let mut nack_start = prev;
         let nack_end_inclusive = seq.prev();
         let missing = prev.distance_to(seq).saturating_sub(1);
-        Self::trace_gap(prev, seq, missing);
+
+        if missing > 0 {
+            tracing::trace!("datagram_gap");
+        }
 
         loop {
             let mut chunk_end = nack_start;
@@ -203,7 +218,7 @@ impl Session {
                 start: nack_start,
                 end: chunk_end,
             };
-            Self::trace_range_event("queue_nak", &range);
+            tracing::trace!(event = "queue_nak");
             self.outgoing_naks.push(range);
 
             if chunk_end == nack_end_inclusive {
@@ -217,20 +232,15 @@ impl Session {
             start: seq,
             end: seq,
         };
-        Self::trace_range_event("ack_gap_end", &ack_range);
+        tracing::trace!(event = "ack_gap_end");
         self.outgoing_acks.push(ack_range);
-    }
-
-    /// Returns true if this reliable index is new and should be processed.
-    fn process_reliable_index(&mut self, ridx: Sequence24) -> bool {
-        self.reliable_tracker.see(ridx)
     }
 
     /// Handle ordered delivery via per-channel heaps.
     fn handle_ordered(
         &mut self,
         enc: EncapsulatedPacket,
-        out: &mut Vec<RaknetPacket>,
+        out: &mut Vec<IncomingPacket>,
     ) -> Result<(), DecodeError> {
         if let Some(ready) = self.ordering.handle_ordered(enc) {
             for pkt in ready {
@@ -238,59 +248,6 @@ impl Session {
             }
         }
         Ok(())
-    }
-
-    pub(crate) fn dump_ack_payload(tag: &str, payload: &AckNackPayload) {
-        if !tracing::enabled!(tracing::Level::TRACE) {
-            return;
-        }
-
-        let mut buf = BytesMut::new();
-        if payload.encode_raknet(&mut buf).is_ok() {
-            let bytes = buf.freeze();
-            let hex = bytes
-                .iter()
-                .map(|b| format!("{:02X}", b))
-                .collect::<Vec<_>>()
-                .join(" ");
-
-            tracing::trace!(
-                tag = tag,
-                ranges = payload.ranges.len(),
-                raw = %hex,
-                "ack_payload_dump"
-            );
-
-            for (idx, range) in payload.ranges.iter().enumerate() {
-                tracing::trace!(
-                    tag = tag,
-                    idx = idx,
-                    start = range.start.value(),
-                    end = range.end.value(),
-                    "ack_range_dump"
-                );
-            }
-        }
-    }
-
-    fn trace_range_event(event: &str, range: &SequenceRange) {
-        tracing::trace!(
-            event = event,
-            start = range.start.value(),
-            end = range.end.value(),
-            "ack_range_event"
-        );
-    }
-
-    fn trace_gap(prev: Sequence24, seq: Sequence24, missing: u32) {
-        if missing > 0 {
-            tracing::trace!(
-                prev = prev.value(),
-                seq = seq.value(),
-                missing = missing,
-                "datagram_gap"
-            );
-        }
     }
 }
 

@@ -52,6 +52,46 @@ impl OrderingChannels {
         Some(idx)
     }
 
+    /// Force advance the read index if it matches the given index and
+    /// return any buffered packets that become ready as a result.
+    ///
+    /// Used when an ordered packet is dropped (e.g. split timeout) so that
+    /// downstream code can immediately deliver any newly unblocked packets.
+    pub fn skip_index(
+        &mut self,
+        channel: u8,
+        index: Sequence24,
+    ) -> Option<Vec<EncapsulatedPacket>> {
+        let ch = channel as usize;
+        if ch >= self.order_read.len() {
+            return None;
+        }
+        if self.order_read[ch] != index {
+            return None;
+        }
+
+        self.order_read[ch] = self.order_read[ch].next();
+
+        let mut ready = Vec::new();
+        while let Some(top) = self.heaps[ch].peek() {
+            if top.0.index == self.order_read[ch] {
+                let Reverse(OrderedEncap { index: _, pkt }) = self.heaps[ch].pop().unwrap();
+                self.order_read[ch] = self.order_read[ch].next();
+                ready.push(pkt);
+            } else {
+                break;
+            }
+        }
+
+        tracing::trace!(
+            channel = ch,
+            skipped = index.value(),
+            released = ready.len(),
+            "ordering_skip_release"
+        );
+        Some(ready)
+    }
+
     /// Handle an ordered packet; returns a list of packets ready for decode in-order.
     pub fn handle_ordered(&mut self, enc: EncapsulatedPacket) -> Option<Vec<EncapsulatedPacket>> {
         let ch = enc.ordering_channel? as usize;
@@ -61,6 +101,15 @@ impl OrderingChannels {
         let idx = enc.ordering_index?;
 
         if self.order_read[ch] < idx {
+            // Prevent unbounded growth if a client skips sequences or floods.
+            if self.heaps[ch].len() >= 2048 {
+                tracing::warn!(
+                    channel = ch,
+                    "dropping ordered packet, buffer full (len=2048)"
+                );
+                return Some(Vec::new());
+            }
+
             self.heaps[ch].push(Reverse(OrderedEncap {
                 index: idx,
                 pkt: enc,

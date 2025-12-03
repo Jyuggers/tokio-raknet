@@ -1,8 +1,9 @@
 //! Unconnected (offline) RakNet discovery and ping packets.
 
-use bytes::{Buf, BufMut, Bytes};
+use bytes::{Buf, BufMut};
 
 use crate::protocol::{
+    constants::DEFAULT_UNCONNECTED_MAGIC,
     packet::{Packet, RaknetEncodable},
     types::{Advertisement, Magic, RaknetTime},
 };
@@ -28,10 +29,12 @@ impl Packet for UnconnectedPing {
     }
 
     fn decode_body(src: &mut impl Buf) -> Result<Self, super::DecodeError> {
-        Ok(Self {
-            ping_time: RaknetTime::decode_raknet(src)?,
-            magic: Magic::decode_raknet(src)?,
-        })
+        let ping_time = RaknetTime::decode_raknet(src)?;
+        let magic = Magic::decode_raknet(src)?;
+        if magic != DEFAULT_UNCONNECTED_MAGIC {
+            return Err(super::DecodeError::InvalidMagic);
+        }
+        Ok(Self { ping_time, magic })
     }
 }
 
@@ -59,19 +62,68 @@ impl Packet for UnconnectedPong {
     }
 
     fn decode_body(src: &mut impl Buf) -> Result<Self, super::DecodeError> {
+        let ping_time = RaknetTime::decode_raknet(src)?;
+        let server_guid = u64::decode_raknet(src)?;
+        let magic = Magic::decode_raknet(src)?;
+        if magic != DEFAULT_UNCONNECTED_MAGIC {
+            return Err(super::DecodeError::InvalidMagic);
+        }
+        let advertisement = Advertisement::decode_raknet(src)?;
         Ok(Self {
-            ping_time: RaknetTime::decode_raknet(src)?,
-            server_guid: u64::decode_raknet(src)?,
-            magic: Magic::decode_raknet(src)?,
-            advertisement: Advertisement::decode_raknet(src)?,
+            ping_time,
+            server_guid,
+            magic,
+            advertisement,
         })
     }
 }
 
-/// Legacy packet used for querying open connections; currently unimplemented.
+/// Advertise system packet (legacy/alternative to UnconnectedPong).
+#[derive(Debug, Clone)]
+pub struct AdvertiseSystem {
+    pub ping_time: RaknetTime,
+    pub server_guid: u64,
+    pub magic: Magic,
+    pub advertisement: Advertisement,
+}
+
+impl Packet for AdvertiseSystem {
+    const ID: u8 = 0x1d;
+
+    fn encode_body(
+        &self,
+        dst: &mut impl BufMut,
+    ) -> Result<(), crate::protocol::packet::EncodeError> {
+        self.ping_time.encode_raknet(dst)?;
+        self.server_guid.encode_raknet(dst)?;
+        self.magic.encode_raknet(dst)?;
+        self.advertisement.encode_raknet(dst)?;
+        Ok(())
+    }
+
+    fn decode_body(src: &mut impl Buf) -> Result<Self, super::DecodeError> {
+        let ping_time = RaknetTime::decode_raknet(src)?;
+        let server_guid = u64::decode_raknet(src)?;
+        let magic = Magic::decode_raknet(src)?;
+        if magic != DEFAULT_UNCONNECTED_MAGIC {
+            return Err(super::DecodeError::InvalidMagic);
+        }
+        let advertisement = Advertisement::decode_raknet(src)?;
+        Ok(Self {
+            ping_time,
+            server_guid,
+            magic,
+            advertisement,
+        })
+    }
+}
+
+/// Unconnected ping for open connections.
+/// Same structure as UnconnectedPing but different ID.
 #[derive(Debug, Clone)]
 pub struct UnconnectedPingOpenConnections {
-    pub payload: Bytes,
+    pub ping_time: RaknetTime,
+    pub magic: Magic,
 }
 
 impl Packet for UnconnectedPingOpenConnections {
@@ -81,18 +133,18 @@ impl Packet for UnconnectedPingOpenConnections {
         &self,
         dst: &mut impl BufMut,
     ) -> Result<(), crate::protocol::packet::EncodeError> {
-        dst.put_slice(&self.payload);
+        self.ping_time.encode_raknet(dst)?;
+        self.magic.encode_raknet(dst)?;
         Ok(())
     }
 
     fn decode_body(src: &mut impl Buf) -> Result<Self, super::DecodeError> {
-        let remaining = src.remaining();
-        let payload = src.copy_to_bytes(remaining);
-
-        Err(super::DecodeError::UnimplementedPacket {
-            id: Self::ID,
-            payload,
-        })
+        let ping_time = RaknetTime::decode_raknet(src)?;
+        let magic = Magic::decode_raknet(src)?;
+        if magic != DEFAULT_UNCONNECTED_MAGIC {
+            return Err(super::DecodeError::InvalidMagic);
+        }
+        Ok(Self { ping_time, magic })
     }
 }
 
@@ -105,7 +157,7 @@ mod tests {
     fn unconnected_ping_roundtrip() {
         let pkt = UnconnectedPing {
             ping_time: RaknetTime(123),
-            magic: [0x23; 16],
+            magic: DEFAULT_UNCONNECTED_MAGIC,
         };
         let mut buf = BytesMut::new();
         pkt.encode_body(&mut buf).unwrap();
@@ -120,7 +172,7 @@ mod tests {
         let pkt = UnconnectedPong {
             ping_time: RaknetTime(1),
             server_guid: 2,
-            magic: [0x45; 16],
+            magic: DEFAULT_UNCONNECTED_MAGIC,
             advertisement: Advertisement(None),
         };
         let mut buf = BytesMut::new();

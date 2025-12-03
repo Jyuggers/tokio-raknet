@@ -32,7 +32,7 @@ impl Session {
         }
         let payload = payload_buf.freeze();
 
-        let max_len = self.max_encapsulated_payload_len();
+        let max_len = self.max_encapsulated_payload_len(reliability, false).max(1);
 
         if payload.len() <= max_len {
             self.enqueue_single_encap(payload, reliability, channel, priority)
@@ -53,7 +53,11 @@ impl Session {
         }
 
         let mut packets = Vec::new();
-        let mut current_size = constants::RAKNET_DATAGRAM_HEADER_SIZE;
+        // Account for IP + UDP headers so the full on-wire packet stays within the
+        // negotiated MTU and avoids downstream fragmentation.
+        let mut current_size = constants::IPV4_HEADER_SIZE
+            + constants::UDP_HEADER_SIZE
+            + constants::RAKNET_DATAGRAM_HEADER_SIZE;
 
         self.fill_datagram(&mut packets, &mut current_size, &mut transmission_bw);
 
@@ -65,12 +69,20 @@ impl Session {
         self.datagram_write_index = self.datagram_write_index.next();
 
         let has_reliable = packets.iter().any(|p| p.header.reliability.is_reliable());
+        let has_split = packets.iter().any(|p| p.header.is_split);
 
+        let flags = if !self.outgoing_heap.is_empty() || has_split {
+            // Burst/split transfer: signal continuous send.
+            crate::protocol::constants::DatagramFlags::VALID
+                | crate::protocol::constants::DatagramFlags::CONTINUOUS_SEND
+        } else {
+            // Default: VALID with Needs B&AS bit (Cloudburst/Bedrock use 0x84 here).
+            crate::protocol::constants::DatagramFlags::VALID
+                | crate::protocol::constants::DatagramFlags::HAS_B_AND_AS
+        };
         let dgram = Datagram {
             header: crate::protocol::types::DatagramHeader {
-                // Match Cloudburst/go-raknet: mark DATA datagrams as valid + needs B&AS.
-                flags: crate::protocol::constants::DatagramFlags::VALID
-                    | crate::protocol::constants::DatagramFlags::HAS_B_AND_AS,
+                flags,
                 sequence: seq,
             },
             payload: DatagramPayload::EncapsulatedPackets(packets),
@@ -107,14 +119,17 @@ impl Session {
     }
 
     pub(crate) fn build_ack_datagram(&mut self, _now: Instant) -> Option<Datagram> {
-        let mut ranges = self.outgoing_acks.pop_for_mtu(self.mtu, 2 + 1);
+        let mut ranges = self.outgoing_acks.pop_for_mtu(
+            self.mtu,
+            constants::IPV4_HEADER_SIZE + constants::UDP_HEADER_SIZE + 2 + 1,
+        );
         if ranges.is_empty() {
             return None;
         }
         ranges.sort_by_key(|r| r.start.value());
 
         let ack_payload = AckNackPayload { ranges };
-        Self::dump_ack_payload("ACK", &ack_payload);
+        tracing::trace!("ack_payload");
 
         let dgram = Datagram {
             header: crate::protocol::types::DatagramHeader {
@@ -131,14 +146,17 @@ impl Session {
     }
 
     pub(crate) fn build_nak_datagram(&mut self) -> Option<Datagram> {
-        let mut ranges = self.outgoing_naks.pop_for_mtu(self.mtu, 2 + 1);
+        let mut ranges = self.outgoing_naks.pop_for_mtu(
+            self.mtu,
+            constants::IPV4_HEADER_SIZE + constants::UDP_HEADER_SIZE + 2 + 1,
+        );
         if ranges.is_empty() {
             return None;
         }
         ranges.sort_by_key(|r| r.start.value());
 
         let nak_payload = AckNackPayload { ranges };
-        Self::dump_ack_payload("NAK", &nak_payload);
+        tracing::trace!("nak_payload");
 
         let dgram = Datagram {
             header: crate::protocol::types::DatagramHeader {
@@ -153,10 +171,17 @@ impl Session {
     }
 
     /// Maximum payload size for an encapsulated packet given the current MTU.
-    fn max_encapsulated_payload_len(&self) -> usize {
-        self.mtu
-            - constants::MAXIMUM_ENCAPSULATED_HEADER_SIZE
-            - constants::RAKNET_DATAGRAM_HEADER_SIZE
+    /// Uses the actual header footprint for the reliability/flags instead of worst-case.
+    fn max_encapsulated_payload_len(&self, reliability: Reliability, is_split: bool) -> usize {
+        let header = self.encapsulated_header_overhead(reliability, is_split);
+        // Only subtract the encapsulated header; datagram/IP/UDP headers are accounted for
+        // once when packing the datagram in `fill_datagram`.
+        self.mtu.saturating_sub(
+            header
+                + constants::IPV4_HEADER_SIZE
+                + constants::UDP_HEADER_SIZE
+                + constants::RAKNET_DATAGRAM_HEADER_SIZE,
+        )
     }
 
     fn next_reliable_index(&mut self) -> Sequence24 {
@@ -227,7 +252,7 @@ impl Session {
         priority: RakPriority,
     ) -> usize {
         let reliability = self.normalize_reliability_for_split(reliability);
-        let max_len = self.max_encapsulated_payload_len();
+        let max_len = self.max_encapsulated_payload_len(reliability, true).max(1);
 
         let total = payload.len();
         let parts = ((total - 1) / max_len) + 1;
@@ -294,6 +319,27 @@ impl Session {
     fn push_outgoing_encap(&mut self, pkt: EncapsulatedPacket, priority: RakPriority) {
         let weight = self.get_next_weight(priority);
         self.outgoing_heap.push(QueuedEncap { weight, pkt });
+    }
+
+    /// Compute the header overhead (flags + indexes + split metadata) for an encapsulated packet.
+    fn encapsulated_header_overhead(&self, reliability: Reliability, is_split: bool) -> usize {
+        let mut size = 3; // flags + bit_length
+        if reliability.is_reliable() {
+            size += 3; // reliable_index
+        }
+        if reliability.is_sequenced() {
+            size += 3; // sequence_index
+        }
+        if reliability.is_ordered() || reliability.is_sequenced() {
+            size += 3; // ordering_index
+            size += 1; // ordering_channel
+        }
+        if is_split {
+            size += 4; // partCount
+            size += 2; // partId
+            size += 4; // partIndex
+        }
+        size
     }
 
     fn track_sent_datagram(&mut self, dgram: Datagram, seq: Sequence24, now: Instant) -> Datagram {

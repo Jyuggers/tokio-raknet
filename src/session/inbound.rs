@@ -9,7 +9,7 @@ use bytes::Bytes;
 
 use crate::protocol::ack::{AckNackPayload, SequenceRange};
 
-use super::Session;
+use super::{IncomingPacket, Session};
 
 impl Session {
     /// Handle an incoming data payload (a list of encapsulated packets).
@@ -17,7 +17,7 @@ impl Session {
         &mut self,
         packets: Vec<EncapsulatedPacket>,
         now: Instant,
-    ) -> Result<Vec<RaknetPacket>, DecodeError> {
+    ) -> Result<Vec<IncomingPacket>, DecodeError> {
         let mut out = Vec::new();
 
         self.sliding.on_packet_received(now);
@@ -43,30 +43,59 @@ impl Session {
         &mut self,
         enc: EncapsulatedPacket,
         now: Instant,
-        out: &mut Vec<RaknetPacket>,
+        out: &mut Vec<IncomingPacket>,
     ) -> Result<(), DecodeError> {
-        let assembled_opt = self.split_assembler.add(enc, now)?;
-        let enc = match assembled_opt {
-            Some(pkt) => pkt,
-            None => return Ok(()),
+        // Reliability Logic:
+        // - For non-split reliable packets:
+        //   1) Deduplicate by reliable index; drop duplicates early.
+        //   2) Decode/deliver; mark reliable index as seen on success.
+        //
+        // - For split packets:
+        //   Do NOT mark reliable-indexes as seen until the split is fully assembled.
+        //   Each split part has its own reliable index, and marking parts as seen
+        //   would prevent retransmission if we later drop the split due to timeout.
+        //   We rely on split_assembler to filter duplicate parts per (id,index).
+
+        let is_split = enc.header.is_split;
+        let ridx = if enc.header.reliability.is_reliable() && !is_split {
+            enc.reliable_index
+        } else {
+            None
         };
 
-        let rel = enc.header.reliability;
-
-        if rel.is_reliable() {
-            let ridx = match enc.reliable_index {
-                Some(idx) => idx,
-                None => {
-                    return Ok(());
-                }
-            };
-
-            if !self.process_reliable_index(ridx) {
-                return Ok(());
-            }
+        if let Some(idx) = ridx
+            && self.reliable_tracker.has_seen(idx)
+        {
+            // Duplicate non-split reliable; drop silently.
+            return Ok(());
         }
 
-        if rel.is_ordered() {
+        // Attempt to add to split assembler (or pass through if not split)
+        // Note: add() consumes the packet.
+        let assembled_opt = match self.split_assembler.add(enc, now) {
+            Ok(v) => v,
+            Err(e) => {
+                // If buffer is full, we return Error.
+                // We have NOT marked the reliable index as seen.
+                // Sender will timeout and retransmit. Ideally buffer clears by then.
+                return Err(e);
+            }
+        };
+
+        // If we reached here, the packet was either buffered or reassembled successfully.
+        // For non-split reliable packets, commit the reliable index now.
+        // For split packets, we avoid marking per-part indexes as seen; duplicates
+        // are handled by split_assembler itself.
+        if !is_split && let Some(idx) = ridx {
+            self.reliable_tracker.see(idx);
+        }
+
+        let enc = match assembled_opt {
+            Some(pkt) => pkt,
+            None => return Ok(()), // Buffered partial split
+        };
+
+        if enc.header.reliability.is_ordered() {
             self.handle_ordered(enc, out)?;
         } else {
             self.decode_and_push(enc, out)?;
@@ -78,9 +107,11 @@ impl Session {
     pub(crate) fn decode_and_push(
         &mut self,
         enc: EncapsulatedPacket,
-        out: &mut Vec<RaknetPacket>,
+        out: &mut Vec<IncomingPacket>,
     ) -> Result<(), DecodeError> {
         let mut buf = enc.payload.clone();
+        let reliability = enc.header.reliability;
+        let ordering_channel = enc.ordering_channel;
 
         let pkt = match RaknetPacket::decode(&mut buf) {
             Ok(pkt) => pkt,
@@ -104,7 +135,11 @@ impl Session {
             return Ok(());
         }
 
-        out.push(pkt);
+        out.push(IncomingPacket {
+            packet: pkt,
+            reliability,
+            ordering_channel,
+        });
         Ok(())
     }
 

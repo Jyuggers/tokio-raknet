@@ -34,13 +34,13 @@ bytes = "1"
 Connecting to a server is straightforward. The client handles the offline handshake, MTU negotiation, and session setup automatically.
 
 ```rust,no_run
-use tokio_raknet::transport::RaknetClient;
+use tokio_raknet::transport::RaknetStream;
 use bytes::Bytes;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Connect to a RakNet server
-    let mut client = RaknetClient::connect("127.0.0.1:19132".parse()?, 1400).await?;
+    let mut client = RaknetStream::connect("127.0.0.1:19132".parse()?, 1400).await?;
 
     println!("Connected!");
 
@@ -107,13 +107,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 For games and real-time applications, you often need fine-grained control over how packets are delivered. The `Message` struct allows you to configure reliability, ordering channels, and priority.
 
 ```rust,no_run
-use tokio_raknet::transport::RaknetClient;
+use tokio_raknet::transport::RaknetStream;
 use tokio_raknet::protocol::{reliability::Reliability, state::RakPriority};
 use tokio_raknet::transport::Message;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = RaknetClient::connect("127.0.0.1:19132".parse()?, 1400).await?;
+    let client = RaknetStream::connect("127.0.0.1:19132".parse()?, 1400).await?;
 
     // Send a packet that can be lost (Unreliable), but is immediate
     let movement_update = Message::new(vec![0x01, 0x02])

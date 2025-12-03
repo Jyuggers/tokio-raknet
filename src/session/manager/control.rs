@@ -20,6 +20,7 @@ impl ManagedSession {
         &mut self,
         server_guid: u64,
         now: Instant,
+        secure: bool,
     ) -> Result<(), SessionError> {
         if self.state == ConnectionState::Closed {
             return Err(SessionError::Closed);
@@ -37,16 +38,16 @@ impl ManagedSession {
         self.last_activity = now;
         self.last_pong_received = now;
 
-        let timestamp = Self::current_raknet_time();
+        let timestamp = Self::current_raknet_time(now);
 
         let pkt = RaknetPacket::ConnectionRequest(ConnectionRequest {
-            server_guid,
+            client_guid: self.config.guid,
             timestamp,
 
-            secure: false,
+            secure,
         });
 
-        self.queue_control_packet(pkt, Reliability::ReliableOrdered, 0, RakPriority::Immediate);
+        self.queue_control_packet(pkt, Reliability::Reliable, 0, RakPriority::Immediate);
 
         Ok(())
     }
@@ -90,21 +91,7 @@ impl ManagedSession {
             return;
         }
 
-        if req.secure {
-            tracing::warn!(
-                peer = %self.peer,
-                guid_match = req.server_guid == self.config.guid,
-                secure = req.secure,
-                "reject_conn_req"
-            );
-            self.queue_connection_request_failed();
-            self.last_disconnect_reason = Some(DisconnectReason::ConnectionRequestFailed);
-            self.state = ConnectionState::Closed;
-
-            return;
-        }
-
-        self.remote_guid = Some(req.server_guid);
+        self.remote_guid = Some(req.client_guid);
 
         self.state = ConnectionState::OnlineHandshake;
         self.last_activity = now;
@@ -117,11 +104,11 @@ impl ManagedSession {
             "accept_conn_req"
         );
 
-        let accepted_ts = Self::current_raknet_time();
+        let accepted_ts = Self::current_raknet_time(now);
         let packet = RaknetPacket::ConnectionRequestAccepted(ConnectionRequestAccepted {
             address: self.peer,
 
-            system_index: 0,
+            system_index: 47,
             system_addresses: Self::default_system_addresses(self.peer),
             request_timestamp: req.timestamp,
 
@@ -150,9 +137,9 @@ impl ManagedSession {
         let packet = RaknetPacket::NewIncomingConnection(NewIncomingConnection {
             server_address: self.peer,
             system_addresses: Self::default_system_addresses(self.peer),
-            request_timestamp: pkt.request_timestamp,
+            request_timestamp: Self::current_raknet_time(now),
 
-            accepted_timestamp: Self::current_raknet_time(),
+            accepted_timestamp: pkt.request_timestamp,
         });
 
         self.queue_control_packet(
@@ -181,7 +168,7 @@ impl ManagedSession {
 
         let pong = RaknetPacket::ConnectedPong(ConnectedPong {
             ping_time: pkt.ping_time,
-            pong_time: Self::current_raknet_time(),
+            pong_time: Self::current_raknet_time(now),
         });
         self.queue_control_packet(pong, Reliability::Unreliable, 0, RakPriority::Immediate);
         self.trace_control("send_connected_pong");
@@ -236,6 +223,7 @@ impl ManagedSession {
         self.queued_reliable_bytes = self.queued_reliable_bytes.saturating_add(added);
     }
 
+    #[allow(dead_code)]
     fn queue_connection_request_failed(&mut self) {
         let packet = RaknetPacket::ConnectionRequestFailed(ConnectionRequestFailed {
             magic: DEFAULT_UNCONNECTED_MAGIC,
@@ -257,12 +245,9 @@ impl ManagedSession {
         }
     }
 
-    pub(super) fn current_raknet_time() -> RaknetTime {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let millis = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+    pub(super) fn current_raknet_time(now: Instant) -> RaknetTime {
+        let start = crate::protocol::types::raknet_start_time();
+        let millis = now.saturating_duration_since(start).as_millis() as u64;
         RaknetTime(millis)
     }
 

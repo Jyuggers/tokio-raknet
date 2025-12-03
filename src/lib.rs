@@ -14,12 +14,12 @@
 //! ## Example: Client
 //!
 //! ```rust,no_run
-//! use tokio_raknet::RaknetClient;
+//! use tokio_raknet::RaknetStream;
 //! use bytes::Bytes;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let mut client = RaknetClient::connect("127.0.0.1:19132".parse()?, 1400).await?;
+//!     let mut client = RaknetStream::connect("127.0.0.1:19132".parse()?).await?;
 //!     client.send("Hello!").await?;
 //!     Ok(())
 //! }
@@ -32,7 +32,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let mut listener = RaknetListener::bind("0.0.0.0:19132".parse()?, 1400).await?;
+//!     let mut listener = RaknetListener::bind("0.0.0.0:19132".parse()?).await?;
 //!     while let Some(mut conn) = listener.accept().await {
 //!         tokio::spawn(async move {
 //!             while let Some(msg) = conn.recv().await {
@@ -50,4 +50,4 @@ pub mod session;
 pub mod transport;
 
 pub use error::RaknetError;
-pub use transport::{RaknetClient, RaknetConnection, RaknetListener};
+pub use transport::{RaknetListener, RaknetStream};

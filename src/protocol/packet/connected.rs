@@ -238,34 +238,7 @@ impl Packet for Timestamp {
     }
 }
 
-/// Legacy advertisement packet with an opaque payload.
 #[derive(Debug, Clone)]
-pub struct AdvertiseSystem {
-    payload: Bytes,
-}
-
-impl Packet for AdvertiseSystem {
-    const ID: u8 = 0x1d;
-
-    fn encode_body(
-        &self,
-        dst: &mut impl BufMut,
-    ) -> Result<(), crate::protocol::packet::EncodeError> {
-        dst.put_slice(&self.payload);
-        Ok(())
-    }
-
-    fn decode_body(src: &mut impl Buf) -> Result<Self, super::DecodeError> {
-        let remaining = src.remaining();
-        let payload = src.copy_to_bytes(remaining);
-
-        Err(super::DecodeError::UnimplementedPacket {
-            id: Self::ID,
-            payload,
-        })
-    }
-}
-
 pub struct EncapsulatedNak(pub AckNackPayload);
 
 impl Packet for EncapsulatedNak {
@@ -283,6 +256,7 @@ impl Packet for EncapsulatedNak {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct EncapsulatedAck(pub AckNackPayload);
 
 impl Packet for EncapsulatedAck {

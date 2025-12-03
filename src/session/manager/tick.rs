@@ -47,7 +47,7 @@ impl ManagedSession {
     }
 
     pub(crate) fn send_connected_ping(&mut self, now: Instant) {
-        let timestamp = Self::current_raknet_time();
+        let timestamp = Self::current_raknet_time(now);
 
         let pkt = RaknetPacket::ConnectedPing(ConnectedPing {
             ping_time: timestamp,

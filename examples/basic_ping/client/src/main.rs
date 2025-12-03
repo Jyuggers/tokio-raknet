@@ -2,7 +2,7 @@ use bytes::Bytes;
 use std::{error::Error, net::SocketAddr};
 use tokio_raknet::{
     // We no longer need the full RaknetPacket enum at this layer
-    transport::RaknetClient,
+    transport::RaknetStream,
 };
 
 #[tokio::main]
@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("connecting to {server_addr}");
 
-    let client = RaknetClient::connect(server_addr, 1400).await?;
+    let client = RaknetStream::connect(server_addr).await?;
 
     println!("Succesfully connected!");
 

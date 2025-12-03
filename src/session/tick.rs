@@ -11,7 +11,12 @@ impl Session {
 
         self.process_incoming_acks_naks(now);
 
-        self.split_assembler.prune(now);
+        let dropped = self.split_assembler.prune(now);
+        for (ch, idx) in dropped {
+            if let (Some(ch), Some(idx)) = (ch, idx) {
+                self.ordering.skip_index(ch, idx);
+            }
+        }
 
         let mut bw = self.sliding.get_retransmission_bandwidth();
         if bw > 0 {
