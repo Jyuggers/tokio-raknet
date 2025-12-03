@@ -17,10 +17,12 @@ use super::offline::{
 
 use std::sync::{Arc, RwLock};
 
+use crate::transport::listener::RaknetListenerConfig;
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn dispatch_datagram(
     socket: &UdpSocket,
-    mtu: usize,
+    config: &RaknetListenerConfig,
     bytes: &[u8],
     peer: SocketAddr,
     sessions: &mut HashMap<SocketAddr, SessionState>,
@@ -32,13 +34,13 @@ pub(super) async fn dispatch_datagram(
     advertisement: &Arc<RwLock<Vec<u8>>>,
 ) {
     if sessions.contains_key(&peer) {
-        if !handle_incoming_udp(socket, mtu, bytes, peer, sessions, pending, new_conn_tx).await {
+        if !handle_incoming_udp(socket, config, bytes, peer, sessions, pending, new_conn_tx).await {
             // If decoding failed, check if it is an offline packet (e.g. handshake retry).
             // If so, don't kill the session; let handle_offline deal with it.
             if is_offline_packet_id(bytes[0]) {
                 handle_offline(
                     socket,
-                    mtu,
+                    config,
                     bytes,
                     peer,
                     sessions,
@@ -52,7 +54,7 @@ pub(super) async fn dispatch_datagram(
                 sessions.remove(&peer);
                 handle_offline(
                     socket,
-                    mtu,
+                    config,
                     bytes,
                     peer,
                     sessions,
@@ -73,7 +75,7 @@ pub(super) async fn dispatch_datagram(
     if is_offline_packet_id(bytes[0]) {
         handle_offline(
             socket,
-            mtu,
+            config,
             bytes,
             peer,
             sessions,
@@ -87,19 +89,20 @@ pub(super) async fn dispatch_datagram(
     }
 }
 
-#[tracing::instrument(skip_all, fields(peer= %msg.peer.to_string()), level = "trace")]
+#[tracing::instrument(skip(socket, sessions), level = "trace")]
 pub(super) async fn handle_outgoing_msg(
     socket: &UdpSocket,
     mtu: usize,
     msg: crate::transport::OutboundMsg,
     sessions: &mut HashMap<SocketAddr, SessionState>,
+    config: &RaknetListenerConfig,
 ) {
     let now = Instant::now();
     let state = sessions.entry(msg.peer).or_insert_with(|| {
         let (tx, rx) = mpsc::channel(128);
-        let config = server_session_config();
+        let sess_config = server_session_config(config);
         SessionState {
-            managed: ManagedSession::with_config(msg.peer, mtu, now, config),
+            managed: ManagedSession::with_config(msg.peer, mtu, now, sess_config),
             to_app: tx,
             pending_rx: Some(rx),
             announced: false,
@@ -149,10 +152,10 @@ pub(super) async fn tick_sessions(
     }
 }
 
-#[tracing::instrument(skip_all, fields(peer= %peer.to_string()), level = "trace")]
+#[tracing::instrument(skip(socket, sessions, _pending, new_conn_tx), level = "trace")]
 async fn handle_incoming_udp(
     socket: &UdpSocket,
-    mtu: usize,
+    config: &RaknetListenerConfig,
     bytes: &[u8],
     peer: SocketAddr,
     sessions: &mut HashMap<SocketAddr, SessionState>,
@@ -172,10 +175,10 @@ async fn handle_incoming_udp(
     };
     let now = Instant::now();
     let state = sessions.entry(peer).or_insert_with(|| {
-        tracing::debug!(mtu = mtu, "create_session");
+        tracing::debug!(mtu = config.max_mtu, "create_session");
         let (tx, rx) = mpsc::channel(128);
-        let config = server_session_config();
-        let sess = ManagedSession::with_config(peer, mtu, now, config);
+        let sess_config = server_session_config(config);
+        let sess = ManagedSession::with_config(peer, config.max_mtu as usize, now, sess_config);
         SessionState {
             managed: sess,
             to_app: tx,

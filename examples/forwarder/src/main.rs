@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tracing::info!("Listening on: {}", bind_addr);
     tracing::info!("Forwarding to: {}", target_host);
 
-    let mut listener = RaknetListener::bind(bind_addr, 1200).await?;
+    let mut listener = RaknetListener::bind(bind_addr).await?;
 
     // Accept only one connection
     if let Some(client_stream) = listener.accept().await {
@@ -55,7 +55,7 @@ async fn handle_connection(
     let remote_addr = addrs.next().ok_or("Failed to resolve target host")?;
 
     tracing::info!("[{}] Connecting to server {}...", client_addr, remote_addr);
-    let mut server = RaknetStream::connect(remote_addr, 1200).await?;
+    let mut server = RaknetStream::connect(remote_addr).await?;
     tracing::info!("[{}] Connected to server!", client_addr);
 
     // Split the streams locally to manage concurrent read/writes

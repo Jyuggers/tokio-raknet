@@ -5,7 +5,7 @@ use tokio_raknet::{RaknetListener, RaknetStream};
 #[tokio::test]
 async fn test_basic_handshake_and_exchange() {
     // 1. Bind a server to a random port
-    let mut listener = RaknetListener::bind("127.0.0.1:0".parse().unwrap(), 1400)
+    let mut listener = RaknetListener::bind("127.0.0.1:0".parse().unwrap())
         .await
         .expect("failed to bind listener");
     let local_addr = listener.local_addr();
@@ -39,7 +39,7 @@ async fn test_basic_handshake_and_exchange() {
         // Give server a moment to bind (though not strictly needed with await)
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let mut client = RaknetStream::connect(local_addr, 1400)
+        let mut client = RaknetStream::connect(local_addr)
             .await
             .expect("failed to connect to server");
 

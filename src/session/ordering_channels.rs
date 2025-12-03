@@ -97,6 +97,15 @@ impl OrderingChannels {
         let idx = enc.ordering_index?;
 
         if self.order_read[ch] < idx {
+            // Prevent unbounded growth if a client skips sequences or floods.
+            if self.heaps[ch].len() >= 2048 {
+                tracing::warn!(
+                    channel = ch,
+                    "dropping ordered packet, buffer full (len=2048)"
+                );
+                return Some(Vec::new());
+            }
+
             self.heaps[ch].push(Reverse(OrderedEncap {
                 index: idx,
                 pkt: enc,

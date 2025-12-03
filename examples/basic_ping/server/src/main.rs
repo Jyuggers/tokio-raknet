@@ -9,7 +9,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .parse()?;
 
     println!("listening on {bind_addr}");
-    let mut listener = RaknetListener::bind(bind_addr, 1400).await?;
+    let mut listener = RaknetListener::bind(bind_addr).await?;
 
     while let Some(mut conn) = listener.accept().await {
         println!(

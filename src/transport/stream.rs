@@ -19,9 +19,56 @@ use crate::session::manager::{ConnectionState, ManagedSession, SessionConfig, Se
 
 use super::{OutboundMsg, ReceivedMessage};
 
+use crate::protocol::constants::{self};
+
 const TICK_INTERVAL: Duration = Duration::from_millis(20);
 const HANDSHAKE_RETRIES: usize = 3;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(400);
+
+/// Configuration for a `RaknetStream`.
+#[derive(Debug, Clone)]
+pub struct RaknetStreamConfig {
+    /// MTU size to attempt negotiation with.
+    pub mtu: u16,
+    /// Optional socket receive buffer size.
+    pub socket_recv_buffer_size: Option<usize>,
+    /// Optional socket send buffer size.
+    pub socket_send_buffer_size: Option<usize>,
+    /// Timeout for the initial connection handshake.
+    pub connection_timeout: Duration,
+    /// Timeout for an active session.
+    pub session_timeout: Duration,
+    /// Maximum number of ordering channels.
+    pub max_ordering_channels: usize,
+    /// Maximum capacity of the ACK queue.
+    pub ack_queue_capacity: usize,
+    /// Timeout for reassembling split packets.
+    pub split_timeout: Duration,
+    /// Maximum window size for reliable packets.
+    pub reliable_window: u32,
+    /// Maximum number of parts in a single split packet.
+    pub max_split_parts: u32,
+    /// Maximum number of concurrent split packets being reassembled.
+    pub max_concurrent_splits: usize,
+}
+
+impl Default for RaknetStreamConfig {
+    fn default() -> Self {
+        Self {
+            mtu: 1400,
+            socket_recv_buffer_size: None,
+            socket_send_buffer_size: None,
+            connection_timeout: Duration::from_secs(10),
+            session_timeout: Duration::from_secs(10),
+            max_ordering_channels: constants::MAXIMUM_ORDERING_CHANNELS as usize,
+            ack_queue_capacity: 1024,
+            split_timeout: Duration::from_secs(30),
+            reliable_window: constants::MAX_ACK_SEQUENCES as u32,
+            max_split_parts: 8192,
+            max_concurrent_splits: 4096,
+        }
+    }
+}
 
 /// A unified RakNet connection stream.
 ///
@@ -50,14 +97,33 @@ impl RaknetStream {
         }
     }
 
-    /// Connect to a RakNet server at the given address using the provided MTU.
-    pub async fn connect(server: SocketAddr, mtu: usize) -> Result<Self, crate::RaknetError> {
-        let socket = UdpSocket::bind("0.0.0.0:0").await?;
+    /// Connect to a RakNet server at the given address using default configuration.
+    pub async fn connect(server: SocketAddr) -> Result<Self, crate::RaknetError> {
+        Self::connect_with_config(server, RaknetStreamConfig::default()).await
+    }
+
+    /// Connect to a RakNet server with a custom configuration.
+    pub async fn connect_with_config(server: SocketAddr, config: RaknetStreamConfig) -> Result<Self, crate::RaknetError> {
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+        socket.set_nonblocking(true)?;
+
+        // if let Some(size) = config.socket_recv_buffer_size {
+        //     let _ = socket.set_recv_buffer_size(size);
+        // }
+        // if let Some(size) = config.socket_send_buffer_size {
+        //     let _ = socket.set_send_buffer_size(size);
+        // }
+
+        let socket = UdpSocket::from_std(socket)?;
         let local = socket.local_addr()?;
 
         // Perform offline handshake using OpenConnectionRequest1/2.
         let client_guid = client_guid();
-        let handshake = perform_offline_handshake(&socket, server, mtu, client_guid).await?;
+        let handshake = perform_offline_handshake(&socket, server, config.mtu as usize, client_guid).await?;
+
+        // Use negotiated MTU
+        let mut config = config;
+        config.mtu = handshake.mtu;
 
         let (outbound_tx, outbound_rx) = mpsc::channel::<OutboundMsg>(1024);
         let (to_app_tx, to_app_rx) =
@@ -66,13 +132,13 @@ impl RaknetStream {
 
         let context = ClientMuxerContext {
             server,
-            mtu: handshake.mtu as usize,
             server_guid: handshake.server_guid,
             client_guid, // Use the same guid generated above
             secure_connection_established: handshake.secure_connection_established,
             outbound_rx,
             to_app: to_app_tx,
             ready: ready_tx,
+            config,
         };
 
         tokio::spawn(run_client_muxer(socket, context));
@@ -141,7 +207,6 @@ struct OfflineHandshake {
 struct ClientMuxerContext {
     // Connection properties
     server: SocketAddr,
-    mtu: usize,
     server_guid: u64,
     client_guid: u64,
     secure_connection_established: bool,
@@ -150,11 +215,12 @@ struct ClientMuxerContext {
     outbound_rx: mpsc::Receiver<OutboundMsg>,
     to_app: mpsc::Sender<Result<ReceivedMessage, crate::RaknetError>>,
     ready: oneshot::Sender<Result<(), crate::RaknetError>>,
+    config: RaknetStreamConfig,
 }
 
-#[tracing::instrument(skip_all, fields(peer= %context.server.to_string()) level = "debug")]
+#[tracing::instrument(skip(socket, context), fields(server = %context.server, mtu = context.config.mtu), level = "debug")]
 async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
-    let mut buf = vec![0u8; context.mtu + UDP_HEADER_SIZE + 64];
+    let mut buf = vec![0u8; context.config.mtu as usize + UDP_HEADER_SIZE + 64];
     let mut managed: Option<ManagedSession> = None;
     let mut handshake_started = false;
     // We move the `ready` sender into a local Option
@@ -168,9 +234,10 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
         let ms = ensure_client_session(
             &mut managed,
             context.server,
-            context.mtu,
+            context.config.mtu as usize,
             context.client_guid,
             now,
+            &context.config,
         );
         ensure_client_handshake(
             ms,
@@ -265,9 +332,10 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
                     let ms = ensure_client_session(
                         &mut managed,
                         context.server,
-                        context.mtu,
+                        context.config.mtu as usize,
                         context.client_guid,
                         now,
+                        &context.config,
                     );
                     ensure_client_handshake(
                         ms,
@@ -338,9 +406,10 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
                 let ms = ensure_client_session(
                     &mut managed,
                     context.server,
-                    context.mtu,
+                    context.config.mtu as usize,
                     context.client_guid,
                     now,
+                    &context.config,
                 );
                 ensure_client_handshake(
                     ms,
@@ -531,13 +600,14 @@ fn client_guid() -> u64 {
         .unwrap_or(0xdead_beef_dead_beef)
 }
 
-fn ensure_client_session(
-    managed: &mut Option<ManagedSession>,
+fn ensure_client_session<'a>(
+    managed: &'a mut Option<ManagedSession>,
     server: SocketAddr,
     mtu: usize,
     client_guid: u64,
     now: Instant,
-) -> &mut ManagedSession {
+    config: &RaknetStreamConfig,
+) -> &'a mut ManagedSession {
     managed.get_or_insert_with(|| {
         ManagedSession::with_config(
             server,
@@ -546,6 +616,15 @@ fn ensure_client_session(
             SessionConfig {
                 role: SessionRole::Client,
                 guid: client_guid,
+                session_timeout: config.session_timeout,
+                session: crate::session::SessionTunables {
+                    max_ordering_channels: config.max_ordering_channels,
+                    ack_queue_capacity: config.ack_queue_capacity,
+                    split_timeout: config.split_timeout,
+                    reliable_window: config.reliable_window,
+                    max_split_parts: config.max_split_parts,
+                    max_concurrent_splits: config.max_concurrent_splits,
+                },
                 ..SessionConfig::default()
             },
         )

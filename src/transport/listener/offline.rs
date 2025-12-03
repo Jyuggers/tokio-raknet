@@ -35,14 +35,22 @@ pub(super) fn is_offline_packet_id(id: u8) -> bool {
     x
 }
 
-pub(super) fn server_session_config() -> SessionConfig {
+use crate::transport::listener::RaknetListenerConfig;
+
+pub(super) fn server_session_config(config: &RaknetListenerConfig) -> SessionConfig {
     SessionConfig {
         role: crate::session::manager::SessionRole::Server,
         guid: server_guid(),
+        session_timeout: config.session_timeout,
+        session_stale: config.session_stale,
+        max_queued_reliable_bytes: Some(config.max_queued_reliable_bytes),
         session: crate::session::SessionTunables {
-            // Keep split timeout short to avoid long stalls on incomplete fragments.
-            split_timeout: Duration::from_secs(3),
-            ..Default::default()
+            max_ordering_channels: config.max_ordering_channels,
+            ack_queue_capacity: config.ack_queue_capacity,
+            split_timeout: config.split_timeout,
+            reliable_window: config.reliable_window,
+            max_split_parts: config.max_split_parts,
+            max_concurrent_splits: config.max_concurrent_splits,
         },
         ..Default::default()
     }
@@ -51,7 +59,7 @@ pub(super) fn server_session_config() -> SessionConfig {
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_offline(
     socket: &UdpSocket,
-    _mtu: usize,
+    config: &RaknetListenerConfig,
     bytes: &[u8],
     peer: SocketAddr,
     sessions: &mut std::collections::HashMap<SocketAddr, SessionState>,
@@ -134,10 +142,18 @@ pub(super) async fn handle_offline(
             let padding_len = req.padding.0;
             let mtu_guess =
                 padding_len + 1 + DEFAULT_UNCONNECTED_MAGIC.len() + 1 + ip_header + UDP_HEADER_SIZE;
-            let mtu_clamped = clamp_mtu(mtu_guess as u16, MINIMUM_MTU_SIZE, MAXIMUM_MTU_SIZE);
+            let mtu_clamped = clamp_mtu(mtu_guess as u16, MINIMUM_MTU_SIZE, config.max_mtu);
             let cookie = generate_cookie(peer);
 
-            if pending.len() >= super::MAX_PENDING_CONNECTIONS {
+            if sessions.len() >= config.max_connections {
+                let reply = RaknetPacket::NoFreeIncomingConnections(
+                    crate::protocol::packet::NoFreeIncomingConnections,
+                );
+                send_unconnected_packet(socket, peer, reply).await;
+                return;
+            }
+
+            if pending.len() >= config.max_pending_connections {
                 return;
             }
 
@@ -197,8 +213,8 @@ pub(super) async fn handle_offline(
 
             let (tx, rx) =
                 mpsc::channel::<Result<crate::transport::ReceivedMessage, crate::RaknetError>>(128);
-            let config = server_session_config();
-            let managed = ManagedSession::with_config(peer, mtu_final as usize, now, config);
+            let sess_config = server_session_config(config);
+            let managed = ManagedSession::with_config(peer, mtu_final as usize, now, sess_config);
             sessions.insert(
                 peer,
                 SessionState {

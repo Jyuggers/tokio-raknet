@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     println!("connecting to {server_addr}");
 
-    let client = RaknetStream::connect(server_addr, 1400).await?;
+    let client = RaknetStream::connect(server_addr).await?;
 
     println!("Succesfully connected!");
 

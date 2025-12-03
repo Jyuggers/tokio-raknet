@@ -12,14 +12,14 @@ use tokio_raknet::protocol::types::EoBPadding;
 #[tokio::test]
 async fn test_handshake_retry_bug() {
     // 1. Setup Server
-    let mut listener = RaknetListener::bind("127.0.0.1:0".parse().unwrap(), 1400)
+    let mut listener = RaknetListener::bind("127.0.0.1:0".parse().unwrap())
         .await
         .expect("failed to bind listener");
     let server_addr = listener.local_addr();
     println!("Server listening on {}", server_addr);
 
     // Spawn server loop to accept connections
-    let _ = tokio::spawn(async move {
+    std::mem::drop(tokio::spawn(async move {
         if let Some(_conn) = listener.accept().await {
             println!("Server accepted connection");
             // Keep connection alive
@@ -27,7 +27,7 @@ async fn test_handshake_retry_bug() {
         } else {
             panic!("Server failed to accept connection");
         }
-    });
+    }));
 
     // 2. Setup Raw Client
     let client_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();

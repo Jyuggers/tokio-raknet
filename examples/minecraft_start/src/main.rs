@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Minecraft usually uses a larger MTU, but 1400 is a safe starting point for RakNet negotiation.
     // The client will negotiate the actual MTU with the server during the offline handshake.
-    let mut client = RaknetStream::connect(remote_addr, 1400)
+    let mut client = RaknetStream::connect(remote_addr)
         .await
         .expect("Failed to connect to server.");
 
