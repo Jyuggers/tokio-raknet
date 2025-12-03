@@ -43,7 +43,7 @@
 //!     Ok(())
 //! }
 //! ```
-
+#[doc = include_str!("../README.md")]
 pub mod error;
 pub mod protocol;
 pub mod session;

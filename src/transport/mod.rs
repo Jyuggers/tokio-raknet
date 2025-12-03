@@ -20,8 +20,8 @@ mod listener_conn;
 pub mod mux;
 pub mod stream;
 
-pub use listener::RaknetListener;
-pub use stream::RaknetStream;
+pub use listener::{RaknetListener, RaknetListenerConfig};
+pub use stream::{RaknetStream, RaknetStreamConfig};
 
 /// High-level message object for sending data.
 /// Wraps the payload and delivery options (reliability, channel, priority).
