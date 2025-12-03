@@ -2,9 +2,6 @@
 resolver = "3"
 members = [".", "examples/*/client", "examples/*/server", "examples/minecraft_start", "examples/forwarder"]
 
-[profile.release]
-debug = true
-
 [package]
 name = "tokio-raknet"
 version = "0.1.0"

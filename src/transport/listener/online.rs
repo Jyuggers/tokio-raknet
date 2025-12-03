@@ -11,7 +11,9 @@ use crate::transport::listener_conn::SessionState;
 use crate::transport::mux::flush_managed;
 use bytes::BufMut;
 
-use super::offline::{PendingConnection, handle_offline, is_offline_packet_id, server_session_config};
+use super::offline::{
+    PendingConnection, handle_offline, is_offline_packet_id, server_session_config,
+};
 
 use std::sync::{Arc, RwLock};
 
@@ -85,6 +87,7 @@ pub(super) async fn dispatch_datagram(
     }
 }
 
+#[tracing::instrument(skip_all, fields(peer= %msg.peer.to_string()), level = "trace")]
 pub(super) async fn handle_outgoing_msg(
     socket: &UdpSocket,
     mtu: usize,
@@ -107,14 +110,11 @@ pub(super) async fn handle_outgoing_msg(
         .managed
         .queue_app_packet(msg.packet, msg.reliability, msg.channel, msg.priority);
 
-    tracing::trace!(
-        peer = %msg.peer,
-        connected = state.managed.is_connected(),
-        "outbound queued"
-    );
+    tracing::trace!("outbound queued");
     flush_managed(&mut state.managed, socket, msg.peer, now, false).await;
 }
 
+#[tracing::instrument(skip(socket, sessions), level = "trace")]
 pub(super) async fn tick_sessions(
     socket: &UdpSocket,
     sessions: &mut HashMap<SocketAddr, SessionState>,
@@ -149,6 +149,7 @@ pub(super) async fn tick_sessions(
     }
 }
 
+#[tracing::instrument(skip_all, fields(peer= %peer.to_string()), level = "trace")]
 async fn handle_incoming_udp(
     socket: &UdpSocket,
     mtu: usize,
@@ -165,13 +166,13 @@ async fn handle_incoming_udp(
     let dgram = match Datagram::decode(&mut slice) {
         Ok(d) => d,
         Err(e) => {
-            tracing::debug!(peer = %peer, error = ?e, "failed to decode datagram");
+            tracing::debug!(error = ?e, "failed to decode datagram");
             return false;
         }
     };
     let now = Instant::now();
     let state = sessions.entry(peer).or_insert_with(|| {
-        tracing::debug!(peer = %peer, mtu = mtu, "create_session");
+        tracing::debug!(mtu = mtu, "create_session");
         let (tx, rx) = mpsc::channel(128);
         let config = server_session_config();
         let sess = ManagedSession::with_config(peer, mtu, now, config);
@@ -185,18 +186,9 @@ async fn handle_incoming_udp(
 
     let closed_after = if let Ok(pkts) = state.managed.handle_datagram(dgram, now) {
         if tracing::enabled!(tracing::Level::TRACE) {
-            tracing::trace!(
-                peer = %peer,
-                connected = state.managed.is_connected(),
-                count = pkts.len(),
-                "handle_datagram"
-            );
-            for pkt in &pkts {
-                tracing::trace!(
-                    peer = %peer,
-                    id = format_args!("0x{:02x}", pkt.packet.id()),
-                    "pkt"
-                );
+            tracing::trace!("handle_datagram");
+            for _pkt in &pkts {
+                tracing::trace!("pkt");
             }
         }
         for pkt in ManagedSession::filter_app_packets(pkts) {
@@ -240,6 +232,7 @@ async fn handle_incoming_udp(
     true
 }
 
+#[tracing::instrument(skip(state, new_conn_tx), level = "trace")]
 pub(super) async fn maybe_announce_connection(
     peer: SocketAddr,
     state: &mut SessionState,
@@ -249,18 +242,13 @@ pub(super) async fn maybe_announce_connection(
     )>,
 ) {
     if state.announced || !state.managed.is_connected() {
-        tracing::trace!(
-            peer = %peer,
-            connected = state.managed.is_connected(),
-            announced = state.announced,
-            "maybe_announce"
-        );
+        tracing::trace!("maybe_announce");
         return;
     }
 
     if let Some(rx) = state.pending_rx.take() {
         state.announced = true;
-        tracing::info!(peer = %peer, "announce_connection");
+        tracing::info!("announce_connection");
         if new_conn_tx.send((peer, rx)).await.is_err() {
             state.announced = false;
         }

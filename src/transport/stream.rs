@@ -152,6 +152,7 @@ struct ClientMuxerContext {
     ready: oneshot::Sender<Result<(), crate::RaknetError>>,
 }
 
+#[tracing::instrument(skip_all, fields(peer= %context.server.to_string()) level = "debug")]
 async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
     let mut buf = vec![0u8; context.mtu + UDP_HEADER_SIZE + 64];
     let mut managed: Option<ManagedSession> = None;
@@ -160,12 +161,6 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
     let mut ready_signal = Some(context.ready);
     let mut tick = time::interval(TICK_INTERVAL);
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
-    tracing::debug!(
-        server = %context.server,
-        mtu = context.mtu,
-        "starting client muxer"
-    );
 
     // Initial handshake ensure
     {
@@ -198,7 +193,7 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
                         if e.kind() == std::io::ErrorKind::ConnectionReset {
                             // On Windows, this can happen if a previous send failed (ICMP Port Unreachable).
                             // It shouldn't kill the listener loop.
-                            tracing::trace!("udp connection reset (ignoring): {}", e);
+                            tracing::debug!("udp connection reset (ignoring): {}", e);
                             continue;
                         }
                         tracing::error!("udp socket recv error: {}", e);
@@ -207,7 +202,7 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
                 };
 
                 if peer != context.server {
-                    tracing::trace!(peer = %peer, "ignoring packet from unknown peer");
+                    tracing::debug!("ignoring packet from unknown peer");
                     continue;
                 }
 
@@ -253,11 +248,11 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
                                 }
                                 return;
                             } else {
-                                tracing::trace!(byte = header_byte, "ignoring non-datagram packet");
+                                tracing::debug!("ignoring non-datagram packet");
                             }
                         }
                         Err(_) => {
-                            tracing::trace!(byte = header_byte, "ignoring malformed non-datagram packet");
+                            tracing::debug!("ignoring malformed non-datagram packet");
                         }
                     }
                     continue;
@@ -289,7 +284,7 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
                         Ok(pkts) => {
                             for p in ManagedSession::filter_app_packets(pkts) {
                                 if let RaknetPacket::UserData { id, payload } = p.packet {
-                                    tracing::trace!(id = id, len = payload.len(), "received user packet");
+                                    tracing::trace!("received user packet");
                                     // Reconstruct full packet: [ID] + [Payload]
                                     let mut full = BytesMut::with_capacity(1 + payload.len());
                                     full.put_u8(id);
@@ -392,6 +387,7 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
     tracing::debug!("client muxer terminated");
 }
 
+#[tracing::instrument(skip_all, level = "debug")]
 async fn perform_offline_handshake(
     socket: &UdpSocket,
     server: SocketAddr,
@@ -400,8 +396,6 @@ async fn perform_offline_handshake(
 ) -> std::io::Result<OfflineHandshake> {
     let mut reply1 = None;
     let mut used_mtu = 0;
-
-    tracing::debug!(server = %server, "starting offline handshake");
 
     for &mtu in crate::protocol::constants::MTU_SIZES {
         tracing::debug!(mtu = mtu, "probing mtu");
@@ -445,17 +439,13 @@ async fn perform_offline_handshake(
                         used_mtu = mtu;
                         break;
                     } else {
-                        tracing::trace!(mtu = mtu, "ignoring non-reply1 packet during probe");
+                        tracing::debug!("ignoring non-reply1 packet during probe");
                     }
                 } else {
-                    tracing::trace!(peer = %from, "ignoring reply from non-server during probe");
+                    tracing::debug!("ignoring reply from non-server during probe");
                 }
             } else {
-                tracing::trace!(
-                    mtu = mtu,
-                    attempt = attempts,
-                    "timeout waiting for reply1 attempt"
-                );
+                tracing::debug!("timeout waiting for reply1 attempt");
             }
             attempts += 1;
         }
@@ -581,6 +571,7 @@ async fn ensure_client_handshake(
     }
 }
 
+#[tracing::instrument(skip_all, fields(peer= %peer, on_tick = %run_tick), level = "trace")]
 async fn flush_built_datagrams(
     managed: &mut ManagedSession,
     socket: &UdpSocket,
@@ -588,39 +579,33 @@ async fn flush_built_datagrams(
     now: Instant,
     run_tick: bool,
 ) {
-    tracing::trace!("flushing tick packets");
     if run_tick {
         for d in managed.on_tick(now) {
+            tracing::trace!("send_tick_datagram");
             let mut out = BytesMut::new();
             d.encode(&mut out)
                 .expect("Bad datagram made it into queue.");
-            tracing::trace!(size = out.len(), "sending tick datagram");
             let _ = socket.send_to(&out, peer).await;
         }
     }
 
-    tracing::trace!("flushing data packets");
     while let Some(d) = managed.build_datagram(now) {
+        tracing::trace!("send_datagram");
         let mut out = BytesMut::new();
         d.encode(&mut out)
             .expect("Bad datagram made it into queue.");
-        tracing::trace!(size = out.len(), "sending data datagram");
         let _ = socket.send_to(&out, peer).await;
     }
 
     // Delivery of any unblocked packets happens via drain_ready_to_app() at call sites.
 }
 
+#[tracing::instrument(skip(managed, ready), level = "trace")]
 fn notify_client_ready(
     managed: &ManagedSession,
 
     ready: &mut Option<oneshot::Sender<Result<(), crate::RaknetError>>>,
 ) {
-    tracing::trace!(
-        "notify_client_ready called, connected={}",
-        managed.is_connected()
-    );
-
     if managed.is_connected()
         && let Some(tx) = ready.take()
     {

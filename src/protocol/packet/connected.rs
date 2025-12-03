@@ -238,6 +238,7 @@ impl Packet for Timestamp {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct EncapsulatedNak(pub AckNackPayload);
 
 impl Packet for EncapsulatedNak {
@@ -255,6 +256,7 @@ impl Packet for EncapsulatedNak {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct EncapsulatedAck(pub AckNackPayload);
 
 impl Packet for EncapsulatedAck {

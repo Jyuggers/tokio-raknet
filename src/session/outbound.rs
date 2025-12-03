@@ -129,7 +129,7 @@ impl Session {
         ranges.sort_by_key(|r| r.start.value());
 
         let ack_payload = AckNackPayload { ranges };
-        Self::dump_ack_payload("ACK", &ack_payload);
+        tracing::trace!("ack_payload");
 
         let dgram = Datagram {
             header: crate::protocol::types::DatagramHeader {
@@ -156,7 +156,7 @@ impl Session {
         ranges.sort_by_key(|r| r.start.value());
 
         let nak_payload = AckNackPayload { ranges };
-        Self::dump_ack_payload("NAK", &nak_payload);
+        tracing::trace!("nak_payload");
 
         let dgram = Datagram {
             header: crate::protocol::types::DatagramHeader {

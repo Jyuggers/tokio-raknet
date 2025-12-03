@@ -88,10 +88,10 @@ impl SplitAssembler {
             // Returning an error here causes connection drops/lag in some implementations
             // if the sender aggressively retransmits parts.
             tracing::warn!(
-                "Duplicate split part received. ID: {}, Index: {}, Count: {}",
-                split.id,
-                split.index,
-                split.count
+                id = split.id,
+                index = split.index,
+                count = split.count,
+                "duplicate_split_part"
             );
             return Ok(None);
         }
@@ -113,7 +113,7 @@ impl SplitAssembler {
         let payload = buf.freeze();
         let bit_length = (payload.len() as u16) << 3;
         
-        tracing::trace!("Reassembled split packet ID: {}, Size: {}", split.id, payload.len());
+        tracing::trace!("reassembled_split_packet");
 
         let header = crate::protocol::types::EncapsulatedPacketHeader::new(
             entry.reliability,
@@ -141,9 +141,9 @@ impl SplitAssembler {
         self.entries.retain(|id, entry| {
             if now.duration_since(entry.last_update) >= self.ttl {
                 tracing::warn!(
-                    "Dropping expired split packet ID: {}, Age since last part: {:?}",
-                    id,
-                    now.duration_since(entry.last_update)
+                    id = id,
+                    age = ?now.duration_since(entry.last_update),
+                    "dropping_expired_split_packet"
                 );
                 dropped.push((entry.ordering_channel, entry.ordering_index));
                 false

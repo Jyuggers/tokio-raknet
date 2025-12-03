@@ -18,6 +18,7 @@ macro_rules! define_raknet_packets {
         ///
         /// This is what most networking code will work with when
         /// sending/receiving packets on a RakNet connection.
+        #[derive(Debug)]
         pub enum RaknetPacket {
             $(
                 $name($name),

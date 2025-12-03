@@ -105,6 +105,7 @@ pub struct ReceivedMessage {
 
 /// Message sent from a connection handle to the transport muxer,
 /// representing an outbound logical RakNet packet.
+#[derive(Debug)]
 pub struct OutboundMsg {
     /// Remote peer this logical packet should be sent to.
     pub peer: SocketAddr,
