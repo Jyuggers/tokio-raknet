@@ -18,7 +18,7 @@ struct SplitEntry {
 
     parts: Vec<Option<bytes::Bytes>>,
     received: usize,
-    created: Instant,
+    last_update: Instant,
 }
 
 pub struct SplitAssembler {
@@ -73,7 +73,7 @@ impl SplitAssembler {
             needs_bas: pkt.header.needs_bas,
             parts: vec![None; split.count as usize],
             received: 0,
-            created: now,
+            last_update: now,
         });
 
         if entry.parts.len() != split.count as usize {
@@ -98,6 +98,7 @@ impl SplitAssembler {
 
         entry.parts[idx] = Some(pkt.payload.clone());
         entry.received += 1;
+        entry.last_update = now;
 
         if entry.received != entry.parts.len() {
             return Ok(None);
@@ -138,8 +139,12 @@ impl SplitAssembler {
     pub fn prune(&mut self, now: Instant) -> Vec<(Option<u8>, Option<Sequence24>)> {
         let mut dropped = Vec::new();
         self.entries.retain(|id, entry| {
-            if now.duration_since(entry.created) >= self.ttl {
-                tracing::warn!("Dropping expired split packet ID: {}, Age: {:?}", id, now.duration_since(entry.created));
+            if now.duration_since(entry.last_update) >= self.ttl {
+                tracing::warn!(
+                    "Dropping expired split packet ID: {}, Age since last part: {:?}",
+                    id,
+                    now.duration_since(entry.last_update)
+                );
                 dropped.push((entry.ordering_channel, entry.ordering_index));
                 false
             } else {

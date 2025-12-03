@@ -11,9 +11,7 @@ use crate::transport::listener_conn::SessionState;
 use crate::transport::mux::flush_managed;
 use bytes::BufMut;
 
-use super::offline::{
-    PendingConnection, handle_offline, is_offline_packet_id, server_session_config,
-};
+use super::offline::{PendingConnection, handle_offline, is_offline_packet_id, server_session_config};
 
 use std::sync::{Arc, RwLock};
 
@@ -126,6 +124,7 @@ pub(super) async fn tick_sessions(
 
     for (&peer, state) in sessions.iter_mut() {
         flush_managed(&mut state.managed, socket, peer, now, true).await;
+
         if matches!(state.managed.state(), ConnectionState::Closed) {
             // Inform app of disconnection if it was connected/announced
             if state.announced {

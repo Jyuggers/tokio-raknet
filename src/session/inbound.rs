@@ -46,13 +46,18 @@ impl Session {
         out: &mut Vec<IncomingPacket>,
     ) -> Result<(), DecodeError> {
         // Reliability Logic:
-        // 1. Check if we've already seen this reliable index (Deduplication).
-        //    If we have, we drop it immediately to avoid expensive split processing.
-        // 2. Try to process the packet (Split Assembly or direct).
-        // 3. If successful (or buffered), MARK the reliable index as seen.
-        //    If processing failed (e.g., SplitBufferFull), we DO NOT mark it, allowing retransmission.
+        // - For non-split reliable packets:
+        //   1) Deduplicate by reliable index; drop duplicates early.
+        //   2) Decode/deliver; mark reliable index as seen on success.
+        //
+        // - For split packets:
+        //   Do NOT mark reliable-indexes as seen until the split is fully assembled.
+        //   Each split part has its own reliable index, and marking parts as seen
+        //   would prevent retransmission if we later drop the split due to timeout.
+        //   We rely on split_assembler to filter duplicate parts per (id,index).
 
-        let ridx = if enc.header.reliability.is_reliable() {
+        let is_split = enc.header.is_split;
+        let ridx = if enc.header.reliability.is_reliable() && !is_split {
             enc.reliable_index
         } else {
             None
@@ -61,7 +66,7 @@ impl Session {
         if let Some(idx) = ridx
             && self.reliable_tracker.has_seen(idx)
         {
-            // Duplicate. Drop silently.
+            // Duplicate non-split reliable; drop silently.
             return Ok(());
         }
 
@@ -78,8 +83,10 @@ impl Session {
         };
 
         // If we reached here, the packet was either buffered or reassembled successfully.
-        // Commit the reliable index.
-        if let Some(idx) = ridx {
+        // For non-split reliable packets, commit the reliable index now.
+        // For split packets, we avoid marking per-part indexes as seen; duplicates
+        // are handled by split_assembler itself.
+        if !is_split && let Some(idx) = ridx {
             self.reliable_tracker.see(idx);
         }
 

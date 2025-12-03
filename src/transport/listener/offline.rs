@@ -21,10 +21,9 @@ use crate::protocol::{
         RaknetPacket, UnconnectedPong,
     },
 };
-use crate::session::manager::{ManagedSession, SessionConfig, SessionRole};
+use crate::session::manager::{ManagedSession, SessionConfig};
 use crate::transport::listener_conn::SessionState;
 
-/// Pending offline handshake state.
 pub(super) struct PendingConnection {
     pub mtu: u16,
     pub expires_at: Instant,
@@ -32,14 +31,20 @@ pub(super) struct PendingConnection {
 }
 
 pub(super) fn is_offline_packet_id(id: u8) -> bool {
-    matches!(id, 0x01 | 0x02 | 0x05 | 0x07)
+    let x = matches!(id, 0x01 | 0x02 | 0x05 | 0x07);
+    x
 }
 
 pub(super) fn server_session_config() -> SessionConfig {
     SessionConfig {
-        role: SessionRole::Server,
+        role: crate::session::manager::SessionRole::Server,
         guid: server_guid(),
-        ..SessionConfig::default()
+        session: crate::session::SessionTunables {
+            // Keep split timeout short to avoid long stalls on incomplete fragments.
+            split_timeout: Duration::from_secs(3),
+            ..Default::default()
+        },
+        ..Default::default()
     }
 }
 
@@ -171,7 +176,7 @@ pub(super) async fn handle_offline(
                             server_guid: server_guid(),
                             server_addr,
                             mtu: state.managed.mtu() as u16,
-                            security: false,
+                            security: true,
                         });
                         send_unconnected_packet(socket, peer, reply).await;
                     }

@@ -1,10 +1,12 @@
 use std::time::{Duration, Instant};
 
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use tokio::net::UdpSocket;
 use tokio::time::{self, Interval, MissedTickBehavior};
 
 use crate::session::manager::ManagedSession;
+use crate::transport::ReceivedMessage;
+use crate::protocol::packet::RaknetPacket;
 
 const TICK_INTERVAL_MS: u64 = 20;
 
@@ -68,4 +70,25 @@ fn trace_send(peer: std::net::SocketAddr, d: &crate::protocol::datagram::Datagra
         kind = %kind,
         "send_datagram"
     );
+}
+
+/// Convert a batch of decoded session packets into application messages
+/// (ID byte + payload) with transport metadata.
+pub fn into_received_messages(
+    pkts: Vec<crate::session::IncomingPacket>,
+) -> Vec<ReceivedMessage> {
+    let mut out = Vec::new();
+    for pkt in pkts {
+        if let RaknetPacket::UserData { id, payload } = pkt.packet {
+            let mut buf = BytesMut::with_capacity(1 + payload.len());
+            buf.put_u8(id);
+            buf.extend_from_slice(&payload);
+            out.push(ReceivedMessage {
+                buffer: buf.freeze(),
+                reliability: pkt.reliability,
+                channel: pkt.ordering_channel.unwrap_or(0),
+            });
+        }
+    }
+    out
 }

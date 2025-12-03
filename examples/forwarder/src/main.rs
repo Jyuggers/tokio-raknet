@@ -1,52 +1,33 @@
+use std::error::Error;
 use std::net::SocketAddr;
-use std::{error::Error, fs::OpenOptions};
 use tokio::net::lookup_host;
 use tokio_raknet::transport::{Message, RaknetListener, RaknetStream};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let log_file = OpenOptions::new()
-        .append(true)
-        .create(true)
-        .open("application.log")
-        .unwrap();
-
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .with_writer(log_file)
         .init();
 
     let bind_addr: SocketAddr = "0.0.0.0:19132".parse()?;
-    let target_host = "test.oomph.ac:19132"; // play.lbsg.net
+    let target_host = "zeqa.net:19132"; // play.lbsg.net
 
     println!("RakNet Forwarder starting...");
     println!("Listening on: {}", bind_addr);
     println!("Forwarding to: {}", target_host);
 
-    let mut listener = RaknetListener::bind(bind_addr, 1400).await?;
+    let mut listener = RaknetListener::bind(bind_addr, 1200).await?;
 
-    loop {
-        tokio::select! {
-            conn = listener.accept() => {
-                match conn {
-                    Some(client_stream) => {
-                        let target = target_host.to_string();
-                        tokio::spawn(async move {
-                            if let Err(e) = handle_connection(client_stream, target).await {
-                                eprintln!("Connection error: {:?}", e);
-                            }
-                        });
-                    }
-                    None => break,
-                }
-            }
-            _ = tokio::signal::ctrl_c() => {
-                println!("Shutting down...");
-                break;
-            }
+    // Accept only one connection
+    if let Some(client_stream) = listener.accept().await {
+        let target = target_host.to_string();
+        // Handle the connection in the main task (blocking)
+        if let Err(e) = handle_connection(client_stream, target).await {
+            eprintln!("Connection error: {:?}", e);
         }
     }
 
+    println!("Shutting down...");
     Ok(())
 }
 
@@ -114,6 +95,13 @@ async fn handle_connection(
             }
         }
     }
+
+    println!("[{}] Closing connection...", client_addr);
+    // Send disconnect packet (0x15) to both ends just in case
+    // This ensures the client gets a clean disconnect even if the Listener doesn't detect the drop immediately.
+    let disconnect_msg = Message::new(vec![0x15]);
+    let _ = client.send(disconnect_msg.clone()).await;
+    let _ = server.send(disconnect_msg).await;
 
     println!("[{}] Connection closed", client_addr);
     Ok(())

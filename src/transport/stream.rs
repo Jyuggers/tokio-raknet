@@ -20,6 +20,8 @@ use crate::session::manager::{ConnectionState, ManagedSession, SessionConfig, Se
 use super::{OutboundMsg, ReceivedMessage};
 
 const TICK_INTERVAL: Duration = Duration::from_millis(20);
+const HANDSHAKE_RETRIES: usize = 3;
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_millis(400);
 
 /// A unified RakNet connection stream.
 ///
@@ -165,9 +167,9 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
         "starting client muxer"
     );
 
+    // Initial handshake ensure
     {
         let now = Instant::now();
-        // Use the context fields
         let ms = ensure_client_session(
             &mut managed,
             context.server,
@@ -185,14 +187,11 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
             context.server,
         )
         .await;
-        tracing::trace!("ensure_client_handshake done");
     }
 
     loop {
-        // tracing::trace!("waiting for packet");
         tokio::select! {
             res = socket.recv_from(&mut buf) => {
-                tracing::trace!("socket recv returned");
                 let (len, peer) = match res {
                     Ok(v) => v,
                     Err(e) => {
@@ -206,9 +205,7 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
                         break;
                     }
                 };
-                tracing::trace!(len = len, peer = %peer, "recv_from success");
 
-                // Use context field
                 if peer != context.server {
                     tracing::trace!(peer = %peer, "ignoring packet from unknown peer");
                     continue;
@@ -290,7 +287,6 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
                     // This logic remains the same, but was already correct
                     match ms.handle_datagram(dgram, now) {
                         Ok(pkts) => {
-                            tracing::trace!(connected = ms.is_connected(), "handle_datagram success");
                             for p in ManagedSession::filter_app_packets(pkts) {
                                 if let RaknetPacket::UserData { id, payload } = p.packet {
                                     tracing::trace!(id = id, len = payload.len(), "received user packet");
@@ -343,9 +339,7 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
 
             // Use context field
             Some(msg) = context.outbound_rx.recv() => {
-                tracing::trace!(channel=msg.channel, rel=?msg.reliability, "processing outbound message");
                 let now = Instant::now();
-                // Use context fields
                 let ms = ensure_client_session(
                     &mut managed,
                     context.server,
@@ -353,15 +347,15 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
                     context.client_guid,
                     now,
                 );
-                                    ensure_client_handshake(
-                                        ms,
-                                        &mut handshake_started,
-                                        context.server_guid,
-                                        now,
-                                        context.secure_connection_established,
-                                        &socket,
-                                        context.server
-                                    ).await;
+                ensure_client_handshake(
+                    ms,
+                    &mut handshake_started,
+                    context.server_guid,
+                    now,
+                    context.secure_connection_established,
+                    &socket,
+                    context.server
+                ).await;
                 let _ = ms.queue_app_packet(
                     msg.packet,
                     msg.reliability,
@@ -384,13 +378,15 @@ async fn run_client_muxer(socket: UdpSocket, mut context: ClientMuxerContext) {
         }
     }
 
-    if let Some(mut ms) = managed
-        && ms.is_connected()
-    {
-        tracing::debug!("channel closed, sending disconnect notification");
-        let _ = ms.send_disconnect(crate::protocol::state::DisconnectReason::Disconnected);
-        // Flush the disconnect packet
-        flush_built_datagrams(&mut ms, &socket, context.server, Instant::now(), true).await;
+    // Graceful shutdown check using match to avoid nesting if-lets
+    match managed {
+        Some(mut ms) if ms.is_connected() => {
+            tracing::debug!("channel closed, sending disconnect notification");
+            let _ = ms.send_disconnect(crate::protocol::state::DisconnectReason::Disconnected);
+            // Flush the disconnect packet
+            flush_built_datagrams(&mut ms, &socket, context.server, Instant::now(), true).await;
+        }
+        _ => {}
     }
 
     tracing::debug!("client muxer terminated");
@@ -428,28 +424,49 @@ async fn perform_offline_handshake(
         }
 
         let mut tmp = [0u8; 2048];
-        // Short timeout for each probe
-        let res = timeout(Duration::from_secs(1), socket.recv_from(&mut tmp)).await;
+        let mut attempts = 0;
+        while attempts < HANDSHAKE_RETRIES {
+            // Short timeout for each attempt so we don't stall the whole probe sequence.
+            let res = timeout(HANDSHAKE_TIMEOUT, socket.recv_from(&mut tmp)).await;
 
-        if let Ok(Ok((len, from))) = res {
-            if from == server {
-                let mut slice = &tmp[..len];
-                if let Ok(pkt) = RaknetPacket::decode(&mut slice)
-                    && let RaknetPacket::OpenConnectionReply1(r) = pkt
-                {
-                    tracing::debug!(
-                        mtu = mtu,
-                        server_mtu = r.mtu,
-                        "received OpenConnectionReply1"
-                    );
-                    reply1 = Some(r);
-                    used_mtu = mtu;
-                    break;
+            if let Ok(Ok((len, from))) = res {
+                if from == server {
+                    let mut slice = &tmp[..len];
+                    // Cleaner pattern match without let_chains or nesting
+                    if let Ok(RaknetPacket::OpenConnectionReply1(r)) =
+                        RaknetPacket::decode(&mut slice)
+                    {
+                        tracing::debug!(
+                            mtu = mtu,
+                            server_mtu = r.mtu,
+                            "received OpenConnectionReply1"
+                        );
+                        reply1 = Some(r);
+                        used_mtu = mtu;
+                        break;
+                    } else {
+                        tracing::trace!(mtu = mtu, "ignoring non-reply1 packet during probe");
+                    }
+                } else {
+                    tracing::trace!(peer = %from, "ignoring reply from non-server during probe");
                 }
+            } else {
+                tracing::trace!(
+                    mtu = mtu,
+                    attempt = attempts,
+                    "timeout waiting for reply1 attempt"
+                );
             }
-        } else {
-            tracing::debug!(mtu = mtu, "timeout waiting for OpenConnectionReply1");
+            attempts += 1;
         }
+
+        if reply1.is_some() {
+            break;
+        }
+        tracing::debug!(
+            mtu = mtu,
+            "no valid OpenConnectionReply1 received for probe"
+        );
     }
 
     let reply1 = reply1.ok_or_else(|| {
@@ -503,9 +520,7 @@ async fn perform_offline_handshake(
             continue;
         }
         let mut slice = &tmp[..len];
-        if let Ok(pkt) = RaknetPacket::decode(&mut slice)
-            && let RaknetPacket::OpenConnectionReply2(r) = pkt
-        {
+        if let Ok(RaknetPacket::OpenConnectionReply2(r)) = RaknetPacket::decode(&mut slice) {
             tracing::debug!(server_guid = r.server_guid, "handshake complete");
             break r;
         }
@@ -534,8 +549,16 @@ fn ensure_client_session(
     now: Instant,
 ) -> &mut ManagedSession {
     managed.get_or_insert_with(|| {
-        let config = client_session_config(client_guid);
-        ManagedSession::with_config(server, mtu, now, config)
+        ManagedSession::with_config(
+            server,
+            mtu,
+            now,
+            SessionConfig {
+                role: SessionRole::Client,
+                guid: client_guid,
+                ..SessionConfig::default()
+            },
+        )
     })
 }
 
@@ -584,6 +607,8 @@ async fn flush_built_datagrams(
         tracing::trace!(size = out.len(), "sending data datagram");
         let _ = socket.send_to(&out, peer).await;
     }
+
+    // Delivery of any unblocked packets happens via drain_ready_to_app() at call sites.
 }
 
 fn notify_client_ready(
@@ -602,13 +627,5 @@ fn notify_client_ready(
         tracing::trace!("sending ready signal");
 
         let _ = tx.send(Ok(()));
-    }
-}
-
-fn client_session_config(client_guid: u64) -> SessionConfig {
-    SessionConfig {
-        role: SessionRole::Client,
-        guid: client_guid,
-        ..SessionConfig::default()
     }
 }

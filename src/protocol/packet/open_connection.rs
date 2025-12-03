@@ -7,7 +7,7 @@ use std::net::SocketAddr;
 use bytes::{BufMut, Bytes};
 
 use crate::protocol::{
-    constants,
+    constants::{self, DEFAULT_UNCONNECTED_MAGIC},
     packet::{Packet, RaknetEncodable},
     types::{EoBPadding, Magic, RaknetTime},
 };
@@ -34,8 +34,12 @@ impl Packet for OpenConnectionRequest1 {
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
+        let magic = Magic::decode_raknet(src)?;
+        if magic != DEFAULT_UNCONNECTED_MAGIC {
+            return Err(super::DecodeError::InvalidMagic);
+        }
         Ok(Self {
-            magic: Magic::decode_raknet(src)?,
+            magic,
             protocol_version: u8::decode_raknet(src)?,
             padding: EoBPadding::decode_raknet(src)?,
         })
@@ -69,8 +73,12 @@ impl Packet for OpenConnectionReply1 {
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
+        let magic = Magic::decode_raknet(src)?;
+        if magic != DEFAULT_UNCONNECTED_MAGIC {
+            return Err(super::DecodeError::InvalidMagic);
+        }
         Ok(Self {
-            magic: Magic::decode_raknet(src)?,
+            magic,
             server_guid: u64::decode_raknet(src)?,
             cookie: if bool::decode_raknet(src)? {
                 Some(u32::decode_raknet(src)?)
@@ -113,6 +121,9 @@ impl Packet for OpenConnectionRequest2 {
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
         let magic = Magic::decode_raknet(src)?;
+        if magic != DEFAULT_UNCONNECTED_MAGIC {
+            return Err(super::DecodeError::InvalidMagic);
+        }
         let rest: Bytes = src.copy_to_bytes(src.remaining());
         let mut cursor = &rest[..];
 
@@ -174,8 +185,12 @@ impl Packet for OpenConnectionReply2 {
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
+        let magic = Magic::decode_raknet(src)?;
+        if magic != DEFAULT_UNCONNECTED_MAGIC {
+            return Err(super::DecodeError::InvalidMagic);
+        }
         Ok(Self {
-            magic: Magic::decode_raknet(src)?,
+            magic,
             server_guid: u64::decode_raknet(src)?,
             server_addr: SocketAddr::decode_raknet(src)?,
             mtu: u16::decode_raknet(src)?,
@@ -206,9 +221,14 @@ impl Packet for IncompatibleProtocolVersion {
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
+        let protocol = u8::decode_raknet(src)?;
+        let magic = Magic::decode_raknet(src)?;
+        if magic != DEFAULT_UNCONNECTED_MAGIC {
+            return Err(super::DecodeError::InvalidMagic);
+        }
         Ok(Self {
-            protocol: u8::decode_raknet(src)?,
-            magic: Magic::decode_raknet(src)?,
+            protocol,
+            magic,
             server_guid: u64::decode_raknet(src)?,
         })
     }
@@ -234,8 +254,12 @@ impl Packet for AlreadyConnected {
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
+        let magic = Magic::decode_raknet(src)?;
+        if magic != DEFAULT_UNCONNECTED_MAGIC {
+            return Err(super::DecodeError::InvalidMagic);
+        }
         Ok(Self {
-            magic: Magic::decode_raknet(src)?,
+            magic,
             server_guid: u64::decode_raknet(src)?,
         })
     }
@@ -343,8 +367,12 @@ impl Packet for ConnectionRequestFailed {
     }
 
     fn decode_body(src: &mut impl bytes::Buf) -> Result<Self, super::DecodeError> {
+        let magic = Magic::decode_raknet(src)?;
+        if magic != DEFAULT_UNCONNECTED_MAGIC {
+            return Err(super::DecodeError::InvalidMagic);
+        }
         Ok(Self {
-            magic: Magic::decode_raknet(src)?,
+            magic,
             server_guid: u64::decode_raknet(src)?,
         })
     }

@@ -223,6 +223,7 @@ impl ManagedSession {
         self.queued_reliable_bytes = self.queued_reliable_bytes.saturating_add(added);
     }
 
+    #[allow(dead_code)]
     fn queue_connection_request_failed(&mut self) {
         let packet = RaknetPacket::ConnectionRequestFailed(ConnectionRequestFailed {
             magic: DEFAULT_UNCONNECTED_MAGIC,

@@ -70,4 +70,6 @@ pub enum DecodeError {
     SplitBufferFull,
     #[error("Packet split info missing when header indicates split.")]
     MissingSplitInfo,
+    #[error("Invalid magic value for offline/unconnected packet.")]
+    InvalidMagic,
 }

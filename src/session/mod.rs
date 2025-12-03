@@ -67,10 +67,9 @@ impl Default for SessionTunables {
             max_ordering_channels: constants::MAXIMUM_ORDERING_CHANNELS as usize,
             ack_queue_capacity: 1024,
             // Reduced split timeout to clear dead buffers faster
-            split_timeout: Duration::from_secs(5),
+            split_timeout: Duration::from_secs(30),
             reliable_window: constants::MAX_ACK_SEQUENCES as u32,
             max_split_parts: 8192,
-            // Increased concurrent splits to handle high-volume gameplay
             max_concurrent_splits: 4096,
         }
     }

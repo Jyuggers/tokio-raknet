@@ -3,6 +3,7 @@ mod online;
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::sync::{Arc, RwLock};
 
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
@@ -11,12 +12,9 @@ use crate::protocol::constants::UDP_HEADER_SIZE;
 use crate::transport::listener_conn::SessionState;
 use crate::transport::mux::new_tick_interval;
 use crate::transport::stream::RaknetStream;
-use std::sync::{Arc, RwLock};
 
 use offline::PendingConnection;
 use online::{dispatch_datagram, handle_outgoing_msg, tick_sessions};
-
-use super::OutboundMsg;
 
 pub const MAX_PENDING_CONNECTIONS: usize = 1024;
 
@@ -27,7 +25,7 @@ pub struct RaknetListener {
         SocketAddr,
         mpsc::Receiver<Result<super::ReceivedMessage, crate::RaknetError>>,
     )>,
-    outbound_tx: mpsc::Sender<OutboundMsg>,
+    outbound_tx: mpsc::Sender<super::OutboundMsg>,
     advertisement: Arc<RwLock<Vec<u8>>>,
 }
 
@@ -95,10 +93,12 @@ async fn run_listener_muxer(
         SocketAddr,
         mpsc::Receiver<Result<super::ReceivedMessage, crate::RaknetError>>,
     )>,
-    mut outbound_rx: mpsc::Receiver<OutboundMsg>,
+    mut outbound_rx: mpsc::Receiver<super::OutboundMsg>,
     advertisement: Arc<RwLock<Vec<u8>>>,
 ) {
-    let mut buf = vec![0u8; mtu + UDP_HEADER_SIZE + 64];
+    // Allocate a receive buffer large enough to avoid OS "message too long" errors even if a peer
+    // sends a slightly larger probe than our configured MTU.
+    let mut buf = vec![0u8; (mtu + UDP_HEADER_SIZE + 64).max(2048)];
     let mut sessions: HashMap<SocketAddr, SessionState> = HashMap::new();
     let mut pending: HashMap<SocketAddr, PendingConnection> = HashMap::new();
     let mut tick = new_tick_interval();

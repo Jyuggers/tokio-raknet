@@ -60,7 +60,7 @@ async fn test_handshake_retry_bug() {
     let mut buf = BytesMut::new();
     let req2 = RaknetPacket::OpenConnectionRequest2(OpenConnectionRequest2 {
         magic: DEFAULT_UNCONNECTED_MAGIC,
-        server_addr: server_addr,
+        server_addr,
         mtu: 900,
         cookie: Some(cookie),
         client_proof: false,
