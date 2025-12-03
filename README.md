@@ -13,8 +13,10 @@
 - 🚀 **Fully Asynchronous**: Built from the ground up with `async`/`await` for high concurrency.
 - 🛡️ **Reliability Layers**: Full support for all RakNet reliability types (Reliable, Unreliable, Ordered, Sequenced, etc.).
 - 📦 **Fragmentation**: Automatic splitting and reassembly of large packets transparent to the user.
+- 🔒 **Security & Safety**: Bounded buffers and queues to prevent memory exhaustion attacks (gap flooding, ACK withholding).
+- ⚙️ **Highly Configurable**: Fine-tune MTU, timeouts, buffer limits, and protocol constraints via `RaknetListenerConfig` and `RaknetStreamConfig`.
 - 🔧 **Simple API**: A high-level abstraction that feels like working with a TCP stream, but with the control of UDP.
-- 🔍 **Tracing Support**: Deep integration with `tracing` for debugging connection flows and packet loss.
+- 🔍 **Tracing Support**: Deep integration with `tracing` for low-overhead debugging and performance profiling.
 
 ## Installation
 
@@ -39,8 +41,8 @@ use bytes::Bytes;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Connect to a RakNet server
-    let mut client = RaknetStream::connect("127.0.0.1:19132".parse()?, 1400).await?;
+    // Connect to a RakNet server (default config)
+    let mut client = RaknetStream::connect("127.0.0.1:19132".parse()?).await?;
 
     println!("Connected!");
 
@@ -71,8 +73,8 @@ use tokio_raknet::transport::RaknetListener;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Bind the listener
-    let mut listener = RaknetListener::bind("0.0.0.0:19132".parse()?, 1400).await?;
+    // Bind the listener (default config)
+    let mut listener = RaknetListener::bind("0.0.0.0:19132".parse()?).await?;
     println!("Listening on 0.0.0.0:19132");
 
     // Accept connections loop
@@ -102,6 +104,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+### Configuration
+
+You can customize the behavior of clients and listeners using `RaknetStreamConfig` and `RaknetListenerConfig`. This allows tuning for specific network conditions or security requirements.
+
+**Client with Custom MTU and Timeout:**
+
+```rust,no_run
+use tokio_raknet::transport::{RaknetStream, RaknetStreamConfig};
+use std::time::Duration;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = RaknetStreamConfig {
+        mtu: 1492, // Try to negotiate a larger MTU
+        connection_timeout: Duration::from_secs(5),
+        ..Default::default()
+    };
+
+    let client = RaknetStream::connect_with_config("127.0.0.1:19132".parse()?, config).await?;
+    // ...
+    Ok(())
+}
+```
+
+**Server with Connection Limits:**
+
+```rust,no_run
+use tokio_raknet::transport::{RaknetListener, RaknetListenerConfig};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let config = RaknetListenerConfig {
+        max_connections: 100,
+        max_pending_connections: 50, // Limit handshakes to prevent flooding
+        max_queued_reliable_bytes: 2 * 1024 * 1024, // 2MB limit per session
+        advertisement: b"My Secure Server".to_vec(),
+        ..Default::default()
+    };
+
+    let listener = RaknetListener::bind_with_config("0.0.0.0:19132".parse()?, config).await?;
+    // ...
+    Ok(())
+}
+```
+
 ### Advanced Sending (Reliability & Channels)
 
 For games and real-time applications, you often need fine-grained control over how packets are delivered. The `Message` struct allows you to configure reliability, ordering channels, and priority.
@@ -113,7 +160,7 @@ use tokio_raknet::transport::Message;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = RaknetStream::connect("127.0.0.1:19132".parse()?, 1400).await?;
+    let client = RaknetStream::connect("127.0.0.1:19132".parse()?).await?;
 
     // Send a packet that can be lost (Unreliable), but is immediate
     let movement_update = Message::new(vec![0x01, 0x02])

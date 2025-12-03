@@ -4,7 +4,7 @@ members = [".", "examples/*/client", "examples/*/server", "examples/minecraft_st
 
 [package]
 name = "tokio-raknet"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A high-performance, asynchronous implementation of the RakNet protocol on top of Tokio."
 license = "MIT"
