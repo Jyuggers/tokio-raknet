@@ -63,7 +63,7 @@ impl ReliableTracker {
         if offset < self.window.len() {
             return self.window[offset];
         }
-        
+
         false
     }
 

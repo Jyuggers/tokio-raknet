@@ -176,7 +176,12 @@ impl Session {
         let header = self.encapsulated_header_overhead(reliability, is_split);
         // Only subtract the encapsulated header; datagram/IP/UDP headers are accounted for
         // once when packing the datagram in `fill_datagram`.
-        self.mtu.saturating_sub(header + constants::IPV4_HEADER_SIZE + constants::UDP_HEADER_SIZE + constants::RAKNET_DATAGRAM_HEADER_SIZE)
+        self.mtu.saturating_sub(
+            header
+                + constants::IPV4_HEADER_SIZE
+                + constants::UDP_HEADER_SIZE
+                + constants::RAKNET_DATAGRAM_HEADER_SIZE,
+        )
     }
 
     fn next_reliable_index(&mut self) -> Sequence24 {

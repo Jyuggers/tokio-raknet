@@ -103,7 +103,10 @@ impl RaknetStream {
     }
 
     /// Connect to a RakNet server with a custom configuration.
-    pub async fn connect_with_config(server: SocketAddr, config: RaknetStreamConfig) -> Result<Self, crate::RaknetError> {
+    pub async fn connect_with_config(
+        server: SocketAddr,
+        config: RaknetStreamConfig,
+    ) -> Result<Self, crate::RaknetError> {
         let socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
         socket.set_nonblocking(true)?;
 
@@ -119,7 +122,8 @@ impl RaknetStream {
 
         // Perform offline handshake using OpenConnectionRequest1/2.
         let client_guid = client_guid();
-        let handshake = perform_offline_handshake(&socket, server, config.mtu as usize, client_guid).await?;
+        let handshake =
+            perform_offline_handshake(&socket, server, config.mtu as usize, client_guid).await?;
 
         // Use negotiated MTU
         let mut config = config;

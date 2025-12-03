@@ -216,7 +216,7 @@ impl ManagedSession {
                 // We process sequence AFTER handling payload so that if handling fails
                 // (e.g. split buffer full), we don't ACK the datagram, forcing a resend.
                 self.inner.process_datagram_sequence(dgram.header.sequence);
-                
+
                 for pkt in &pkts {
                     self.handle_control_packet(&pkt.packet, now);
                 }

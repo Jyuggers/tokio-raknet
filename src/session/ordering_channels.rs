@@ -57,7 +57,11 @@ impl OrderingChannels {
     ///
     /// Used when an ordered packet is dropped (e.g. split timeout) so that
     /// downstream code can immediately deliver any newly unblocked packets.
-    pub fn skip_index(&mut self, channel: u8, index: Sequence24) -> Option<Vec<EncapsulatedPacket>> {
+    pub fn skip_index(
+        &mut self,
+        channel: u8,
+        index: Sequence24,
+    ) -> Option<Vec<EncapsulatedPacket>> {
         let ch = channel as usize;
         if ch >= self.order_read.len() {
             return None;

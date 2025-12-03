@@ -112,7 +112,7 @@ impl SplitAssembler {
         }
         let payload = buf.freeze();
         let bit_length = (payload.len() as u16) << 3;
-        
+
         tracing::trace!("reassembled_split_packet");
 
         let header = crate::protocol::types::EncapsulatedPacketHeader::new(
