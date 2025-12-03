@@ -1,20 +1,31 @@
+use mimalloc::MiMalloc;
 use std::error::Error;
 use std::net::SocketAddr;
 use tokio::net::lookup_host;
 use tokio_raknet::transport::{Message, RaknetListener, RaknetStream};
+use tracing::Level;
+use tracing_subscriber::{filter, layer::SubscriberExt, util::SubscriberInitExt};
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    let fmt_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stdout);
+
+    let filter_layer = filter::LevelFilter::from_level(Level::DEBUG);
+
+    tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(filter_layer)
         .init();
 
     let bind_addr: SocketAddr = "0.0.0.0:19132".parse()?;
-    let target_host = "zeqa.net:19132"; // play.lbsg.net
+    let target_host = "play.lbsg.net:19132"; // play.lbsg.net
 
-    println!("RakNet Forwarder starting...");
-    println!("Listening on: {}", bind_addr);
-    println!("Forwarding to: {}", target_host);
+    tracing::info!("RakNet Forwarder starting...");
+    tracing::info!("Listening on: {}", bind_addr);
+    tracing::info!("Forwarding to: {}", target_host);
 
     let mut listener = RaknetListener::bind(bind_addr, 1200).await?;
 
@@ -23,11 +34,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let target = target_host.to_string();
         // Handle the connection in the main task (blocking)
         if let Err(e) = handle_connection(client_stream, target).await {
-            eprintln!("Connection error: {:?}", e);
+            tracing::error!("Connection error: {:?}", e);
         }
     }
 
-    println!("Shutting down...");
+    tracing::info!("Shutting down...");
     Ok(())
 }
 
@@ -36,16 +47,16 @@ async fn handle_connection(
     target_host: String,
 ) -> Result<(), Box<dyn Error>> {
     let client_addr = client.peer_addr();
-    println!("[{}] New client connected", client_addr);
+    tracing::info!("[{}] New client connected", client_addr);
 
     // Resolve target
-    println!("[{}] Resolving {}...", client_addr, target_host);
+    tracing::info!("[{}] Resolving {}...", client_addr, target_host);
     let mut addrs = lookup_host(&target_host).await?;
     let remote_addr = addrs.next().ok_or("Failed to resolve target host")?;
 
-    println!("[{}] Connecting to server {}...", client_addr, remote_addr);
+    tracing::info!("[{}] Connecting to server {}...", client_addr, remote_addr);
     let mut server = RaknetStream::connect(remote_addr, 1200).await?;
-    println!("[{}] Connected to server!", client_addr);
+    tracing::info!("[{}] Connected to server!", client_addr);
 
     // Split the streams locally to manage concurrent read/writes
     // Since RaknetStream doesn't support 'split()' yet or Clone, we have to wrap in Arc<Mutex>
@@ -64,11 +75,11 @@ async fn handle_connection(
                         server.send(outbound).await?;
                     }
                     Some(Err(e)) => {
-                        println!("[{}] Client error: {:?}", client_addr, e);
+                        tracing::info!("[{}] Client error: {:?}", client_addr, e);
                         break;
                     }
                     None => {
-                        println!("[{}] Client disconnected", client_addr);
+                        tracing::info!("[{}] Client disconnected", client_addr);
                         break;
                     }
                 }
@@ -84,11 +95,11 @@ async fn handle_connection(
                         client.send(outbound).await?;
                     }
                     Some(Err(e)) => {
-                        println!("[{}] Server error: {:?}", client_addr, e);
+                        tracing::info!("[{}] Server error: {:?}", client_addr, e);
                         break;
                     }
                     None => {
-                        println!("[{}] Server disconnected", client_addr);
+                        tracing::info!("[{}] Server disconnected", client_addr);
                         break;
                     }
                 }
@@ -96,13 +107,13 @@ async fn handle_connection(
         }
     }
 
-    println!("[{}] Closing connection...", client_addr);
+    tracing::info!("[{}] Closing connection...", client_addr);
     // Send disconnect packet (0x15) to both ends just in case
     // This ensures the client gets a clean disconnect even if the Listener doesn't detect the drop immediately.
     let disconnect_msg = Message::new(vec![0x15]);
     let _ = client.send(disconnect_msg.clone()).await;
     let _ = server.send(disconnect_msg).await;
 
-    println!("[{}] Connection closed", client_addr);
+    tracing::info!("[{}] Connection closed", client_addr);
     Ok(())
 }
