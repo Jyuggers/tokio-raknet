@@ -25,7 +25,7 @@ Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-tokio-raknet = "0.1"
+tokio-raknet = "0.2"
 bytes = "1"
 ```
 
