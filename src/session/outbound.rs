@@ -190,6 +190,12 @@ impl Session {
         idx
     }
 
+    fn next_sequence_index(&mut self) -> Sequence24 {
+        let idx = self.sequence_write_index;
+        self.sequence_write_index = self.sequence_write_index.next();
+        idx
+    }
+
     fn next_ordering_index(&mut self, channel: u8) -> Option<Sequence24> {
         self.ordering.next_order_index(channel)
     }
@@ -207,8 +213,14 @@ impl Session {
             needs_bas: false,
         };
 
-        let ordering_index = if reliability.is_ordered() {
+        let ordering_index = if reliability.is_ordered() || reliability.is_sequenced() {
             self.next_ordering_index(channel)
+        } else {
+            None
+        };
+
+        let sequence_index = if reliability.is_sequenced() {
+            Some(self.next_sequence_index())
         } else {
             None
         };
@@ -223,7 +235,7 @@ impl Session {
             header,
             bit_length: (payload.len() as u16) << 3,
             reliable_index,
-            sequence_index: None,
+            sequence_index,
             ordering_index,
             ordering_channel: ordering_index.map(|_| channel),
             split: None,
@@ -268,8 +280,14 @@ impl Session {
         let split_id = self.split_index;
         self.split_index = self.split_index.wrapping_add(1);
 
-        let ordering_index = if reliability.is_ordered() {
+        let ordering_index = if reliability.is_ordered() || reliability.is_sequenced() {
             self.next_ordering_index(channel)
+        } else {
+            None
+        };
+
+        let sequence_index = if reliability.is_sequenced() {
+            Some(self.next_sequence_index())
         } else {
             None
         };
@@ -299,7 +317,7 @@ impl Session {
                 header,
                 bit_length: (chunk.len() as u16) << 3,
                 reliable_index,
-                sequence_index: None,
+                sequence_index,
                 ordering_index,
                 ordering_channel: ordering_index.map(|_| channel),
                 split,
@@ -420,6 +438,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::datagram::DatagramPayload;
     use crate::protocol::packet::RaknetPacket;
     use bytes::Bytes;
     use std::time::Instant;
@@ -537,5 +556,31 @@ mod tests {
         ];
 
         assert_eq!(&bytes[..], expected);
+    }
+
+    #[test]
+    fn sequenced_packets_get_sequence_index() {
+        let mut session = Session::new(1500);
+        let now = Instant::now();
+
+        session.queue_packet(
+            RaknetPacket::UserData {
+                id: 0x90,
+                payload: Bytes::from_static(b"\xAA\xBB"),
+            },
+            Reliability::UnreliableSequenced,
+            0,
+            RakPriority::Normal,
+        );
+
+        let dgram = session.build_data_datagram(now).expect("datagram");
+        let DatagramPayload::EncapsulatedPackets(pkts) = dgram.payload else {
+            panic!("expected encapsulated datagram");
+        };
+
+        assert_eq!(pkts.len(), 1);
+        assert!(pkts[0].sequence_index.is_some(), "sequence index should be set");
+        assert!(pkts[0].ordering_index.is_some(), "ordering index should be set for sequenced reliabilities");
+        assert!(pkts[0].ordering_channel.is_some(), "ordering channel should be set for sequenced reliabilities");
     }
 }

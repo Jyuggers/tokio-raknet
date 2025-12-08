@@ -107,6 +107,7 @@ pub struct Session {
     split_index: u16,
     datagram_read_index: Sequence24,
     datagram_write_index: Sequence24,
+    sequence_write_index: Sequence24,
     reliability_write_index: Sequence24,
     split_assembler: SplitAssembler,
     ordering: OrderingChannels,
@@ -141,6 +142,7 @@ impl Session {
             split_index: 0,
             datagram_read_index: Sequence24::new(0),
             datagram_write_index: Sequence24::new(0),
+            sequence_write_index: Sequence24::new(0),
             reliability_write_index: Sequence24::new(0),
             split_assembler: SplitAssembler::new(
                 tunables.split_timeout,
